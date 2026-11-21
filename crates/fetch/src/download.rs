@@ -15,6 +15,20 @@ use tokio::{
 };
 use url::Url;
 
+/// Network controls shared by all HTTP(S) transfers in a download.
+///
+/// Proxy credentials belong in the proxy URI and are intentionally never
+/// persisted by the daemon's job store.
+#[derive(Debug, Clone, Default)]
+pub struct NetworkOptions {
+    pub all_proxy: Option<Url>,
+    pub http_proxy: Option<Url>,
+    pub https_proxy: Option<Url>,
+    pub no_proxy: Vec<String>,
+    pub user_agent: Option<String>,
+    pub headers: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DownloadRequest {
     pub sources: Vec<Url>,
@@ -50,12 +64,56 @@ pub struct Downloader {
 
 impl Downloader {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .user_agent("fetch/0.1")
-                .build()
-                .expect("valid client"),
+        Self::with_network(NetworkOptions::default()).expect("default network options are valid")
+    }
+
+    pub fn with_network(network: NetworkOptions) -> Result<Self> {
+        let mut builder = reqwest::Client::builder();
+        if let Some(user_agent) = network.user_agent {
+            builder = builder.user_agent(user_agent);
+        } else {
+            builder = builder.user_agent("fetch/0.1");
         }
+        let mut headers = reqwest::header::HeaderMap::new();
+        for header in network.headers {
+            let (name, value) = header
+                .split_once(':')
+                .context("request header must use the form 'Name: value'")?;
+            let name = reqwest::header::HeaderName::from_bytes(name.trim().as_bytes())
+                .context("invalid request header name")?;
+            let value = reqwest::header::HeaderValue::from_str(value.trim())
+                .context("invalid request header value")?;
+            headers.insert(name, value);
+        }
+        if !headers.is_empty() {
+            builder = builder.default_headers(headers);
+        }
+        if network.all_proxy.is_some()
+            || network.http_proxy.is_some()
+            || network.https_proxy.is_some()
+        {
+            builder = builder.proxy(reqwest::Proxy::custom(move |url| {
+                if bypasses_proxy(url, &network.no_proxy) {
+                    return None;
+                }
+                match url.scheme() {
+                    "http" => network
+                        .http_proxy
+                        .as_ref()
+                        .or(network.all_proxy.as_ref())
+                        .map(|proxy| proxy.as_str().to_owned()),
+                    "https" => network
+                        .https_proxy
+                        .as_ref()
+                        .or(network.all_proxy.as_ref())
+                        .map(|proxy| proxy.as_str().to_owned()),
+                    _ => None,
+                }
+            }));
+        }
+        Ok(Self {
+            client: builder.build().context("building HTTP client")?,
+        })
     }
 
     pub async fn download(&self, request: DownloadRequest) -> Result<DownloadResult> {
@@ -175,6 +233,16 @@ impl Downloader {
             .is_some_and(|h| h.as_bytes().eq_ignore_ascii_case(b"bytes"));
         Ok(RemoteMetadata { length, ranges })
     }
+}
+
+fn bypasses_proxy(url: &Url, rules: &[String]) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    rules.iter().any(|rule| {
+        let rule = rule.trim().trim_start_matches('.');
+        rule == "*" || host.eq_ignore_ascii_case(rule) || host.ends_with(&format!(".{rule}"))
+    })
 }
 
 async fn load_resume(path: &Path, length: u64, sources: &[String]) -> Result<Option<ResumeState>> {
@@ -330,5 +398,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(restored.completed, vec![ByteRange { start: 0, end: 7 }]);
+    }
+
+    #[test]
+    fn matches_no_proxy_hosts_without_overmatching() {
+        let url = Url::parse("https://packages.example.test/archive").unwrap();
+        assert!(bypasses_proxy(&url, &["example.test".into()]));
+        assert!(!bypasses_proxy(&url, &["ample.test".into()]));
+        assert!(bypasses_proxy(&url, &["*".into()]));
     }
 }

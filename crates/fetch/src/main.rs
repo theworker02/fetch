@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use fetch::{
     daemon,
-    download::{DownloadRequest, Downloader},
+    download::{DownloadRequest, Downloader, NetworkOptions},
     metalink, torrent,
 };
 use url::Url;
@@ -18,7 +18,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Download one or more HTTP(S) sources into a local file.
+    /// Download one or more HTTP(S), FTP(S), or SFTP sources into a local file.
     Get {
         #[arg(required = true)]
         sources: Vec<Url>,
@@ -29,6 +29,24 @@ enum Command {
         /// Expected SHA-256 digest, in lowercase or uppercase hex.
         #[arg(long)]
         sha256: Option<String>,
+        /// Proxy URL for every HTTP(S) request (compatible with aria2's --all-proxy).
+        #[arg(long, env = "ALL_PROXY")]
+        all_proxy: Option<Url>,
+        /// Proxy URL for HTTP requests (compatible with --http-proxy).
+        #[arg(long, env = "HTTP_PROXY")]
+        http_proxy: Option<Url>,
+        /// Proxy URL for HTTPS requests (compatible with --https-proxy).
+        #[arg(long, env = "HTTPS_PROXY")]
+        https_proxy: Option<Url>,
+        /// Comma-separated hosts that must bypass configured HTTP(S) proxies.
+        #[arg(long, value_delimiter = ',', env = "NO_PROXY")]
+        no_proxy: Vec<String>,
+        /// HTTP user-agent value (compatible with --user-agent).
+        #[arg(long)]
+        user_agent: Option<String>,
+        /// Additional HTTP request header in 'Name: value' form; repeatable.
+        #[arg(long = "header")]
+        headers: Vec<String>,
     },
     /// Resolve a Metalink document and download its selected file.
     Metalink {
@@ -70,8 +88,22 @@ async fn main() -> Result<()> {
             output,
             splits,
             sha256,
+            all_proxy,
+            http_proxy,
+            https_proxy,
+            no_proxy,
+            user_agent,
+            headers,
         } => {
-            let result = Downloader::new()
+            let network = NetworkOptions {
+                all_proxy,
+                http_proxy,
+                https_proxy,
+                no_proxy,
+                user_agent,
+                headers,
+            };
+            let result = Downloader::with_network(network)?
                 .download(DownloadRequest {
                     sources,
                     output,

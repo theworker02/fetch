@@ -33,8 +33,8 @@ matching compatibility suite and is listed as complete here.
 
 ## Current completed foundation
 
-The initial Rust implementation has real HTTP(S), FTP/FTPS, BitTorrent,
+The initial Rust implementation has real HTTP(S), FTP/FTPS/SFTP, BitTorrent,
 Metalink checksum, local JSON-RPC, WebSocket event, and SQLite state paths.
 These provide a foundation, not compatibility parity.  In particular, option
-coverage, SFTP, resumable sessions, HTTP proxy/cookie compatibility, and the
-full aria2 RPC method set are still pending.
+coverage, HTTP proxy/cookie compatibility, FTP-family proxy support, `.netrc`,
+resumable daemon sessions, and the full aria2 RPC method set are still pending.

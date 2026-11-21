@@ -17,6 +17,7 @@ The Rust workspace is in ``crates/fetch``.  The current migration foundation
 provides:
 
 * concurrent segmented HTTP/HTTPS downloads from multiple mirrors;
+* explicit HTTP(S) proxy, no-proxy, request-header, and user-agent controls;
 * FTP, FTPS, and password-authenticated SFTP downloads, with TLS certificate
   validation for FTPS;
 * final-file SHA-256 verification;
@@ -48,6 +49,16 @@ Requires a current Rust toolchain.
 
 The daemon listens only on ``127.0.0.1`` by default.  Place an authenticated
 TLS proxy in front of it if remote access is required.
+
+HTTP(S) configuration
+----------------------
+
+Fetch supports an aria2-familiar subset of request controls: ``--all-proxy``,
+``--http-proxy``, ``--https-proxy``, ``--no-proxy``, ``--header``, and
+``--user-agent``.  The matching proxy environment variables are also accepted.
+These options currently affect HTTP(S) only. Cookie jars, ``.netrc``,
+FTP-family proxies, and the remainder of aria2's options are not implemented
+and are not claimed as compatible.
 
 Repository layout
 -----------------

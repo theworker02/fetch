@@ -156,7 +156,7 @@ async fn rpc(
     }
     let outcome = match request.method.as_str() {
         "fetch.getVersion" => Ok(
-            json!({"version":VERSION,"enabledFeatures":["http","https","ftp","ftps","bittorrent","metalink","sha256","json-rpc","websocket-events","sqlite-state"]}),
+            json!({"version":VERSION,"enabledFeatures":["http","https","ftp","ftps","sftp","bittorrent","metalink","sha256","json-rpc","websocket-events","sqlite-state"]}),
         ),
         "fetch.tellStatus" => tell_status(&state, &request.params).await,
         "fetch.remove" => remove(&state, &request.params).await,

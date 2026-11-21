@@ -12,6 +12,9 @@ to that source repository.
 The Rust workspace is in `crates/fetch`. It currently provides:
 
 - concurrent ranged HTTP/HTTPS downloads from multiple mirrors;
+- validated HTTP(S) proxy selection through `--all-proxy`, `--http-proxy`,
+  `--https-proxy`, and `--no-proxy`, plus repeatable `--header` and
+  `--user-agent` controls;
 - persisted completed-range checkpoints for compatible resumed transfers;
 - FTP, FTPS, and password-authenticated SFTP downloads through libcurl, with
   certificate validation retained for FTPS;
@@ -39,6 +42,21 @@ cargo run -p fetch -- get sftp://user@host.example/path/file.bin --output file.b
 cargo run -p fetch -- torrent 'magnet:?xt=urn:btih:...' --output-directory .\downloads
 cargo run -p fetch -- daemon
 ```
+
+## HTTP(S) compatibility options
+
+The `get` command accepts an aria2-familiar subset of network controls:
+
+```powershell
+fetch get https://mirror.example/file.iso --output file.iso `
+  --all-proxy http://proxy.example:8080 --no-proxy localhost,.internal `
+  --header 'Authorization: Bearer example' --user-agent 'fetch/0.1'
+```
+
+Proxy routing and custom headers currently apply to HTTP(S) only. FTP/FTPS/SFTP
+proxy support, cookie jars, `.netrc` authentication, retry/backoff settings,
+and the rest of aria2's option catalogue are intentionally rejected or absent;
+they are not silently emulated.
 
 The daemon deliberately refuses non-loopback addresses. Any remote exposure
 must use an authenticated TLS proxy and an explicit security design.
