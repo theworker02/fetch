@@ -13,8 +13,8 @@ The Rust workspace is in `crates/fetch`. It currently provides:
 
 - concurrent ranged HTTP/HTTPS downloads from multiple mirrors;
 - persisted completed-range checkpoints for compatible resumed transfers;
-- FTP and FTPS downloads through libcurl, with certificate validation retained
-  for FTPS;
+- FTP, FTPS, and password-authenticated SFTP downloads through libcurl, with
+  certificate validation retained for FTPS;
 - atomic `.part` staging and full-file SHA-256 validation;
 - Metalink v4 source extraction plus full-file and per-piece SHA-256, SHA-1,
   and MD5 verification for one explicit file entry;
@@ -35,7 +35,7 @@ not publish releases automatically.
 
 ```powershell
 cargo run -p fetch -- get https://example.com/file.bin --output file.bin --splits 8
-cargo run -p fetch -- get ftps://host.example/path/file.bin --output file.bin
+cargo run -p fetch -- get sftp://user@host.example/path/file.bin --output file.bin
 cargo run -p fetch -- torrent 'magnet:?xt=urn:btih:...' --output-directory .\downloads
 cargo run -p fetch -- daemon
 ```

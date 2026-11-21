@@ -17,7 +17,8 @@ The Rust workspace is in ``crates/fetch``.  The current migration foundation
 provides:
 
 * concurrent segmented HTTP/HTTPS downloads from multiple mirrors;
-* FTP and FTPS downloads, with TLS certificate validation for FTPS;
+* FTP, FTPS, and password-authenticated SFTP downloads, with TLS certificate
+  validation for FTPS;
 * final-file SHA-256 verification;
 * resumable ranged transfers with a local, atomic ``.fetch.resume.json``
   checkpoint beside the staged file;

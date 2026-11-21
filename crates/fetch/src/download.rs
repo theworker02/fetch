@@ -153,7 +153,7 @@ impl Downloader {
     }
 
     async fn probe(&self, source: &Url) -> Result<RemoteMetadata> {
-        if matches!(source.scheme(), "ftp" | "ftps") {
+        if matches!(source.scheme(), "ftp" | "ftps" | "sftp") {
             return Ok(RemoteMetadata {
                 length: transport::content_length(source.clone()).await?,
                 // libcurl can perform FTP REST offsets; the transfer itself
@@ -214,7 +214,7 @@ struct RemoteMetadata {
 fn validate_sources(sources: &[Url]) -> Result<()> {
     for source in sources {
         match source.scheme() {
-            "http" | "https" | "ftp" | "ftps" => {}
+            "http" | "https" | "ftp" | "ftps" | "sftp" => {}
             other => bail!("unsupported transport: {other}"),
         }
         if source.host_str().is_none() {
@@ -231,13 +231,13 @@ async fn copy_range(
     end: u64,
     file: Arc<Mutex<File>>,
 ) -> Result<()> {
-    let is_ftp = matches!(source.scheme(), "ftp" | "ftps");
+    let is_ftp = matches!(source.scheme(), "ftp" | "ftps" | "sftp");
     if is_ftp {
         let body = transport::get_range(source, start, end).await?;
         let expected = end - start + 1;
         if body.len() as u64 != expected {
             bail!(
-                "FTP(S) range returned {} bytes; expected {expected}",
+                "FTP(S)/SFTP range returned {} bytes; expected {expected}",
                 body.len()
             );
         }
@@ -267,7 +267,7 @@ async fn copy_range(
 }
 
 async fn copy_stream(client: reqwest::Client, source: Url, file: Arc<Mutex<File>>) -> Result<()> {
-    if matches!(source.scheme(), "ftp" | "ftps") {
+    if matches!(source.scheme(), "ftp" | "ftps" | "sftp") {
         let body = transport::get(source).await?;
         let mut output = file.lock().await;
         output.seek(SeekFrom::Start(0)).await?;
@@ -306,6 +306,8 @@ mod tests {
     #[test]
     fn rejects_unknown_transports() {
         let source = Url::parse("ftp://example.test/file").unwrap();
+        assert!(validate_sources(&[source]).is_ok());
+        let source = Url::parse("sftp://example.test/file").unwrap();
         assert!(validate_sources(&[source]).is_ok());
         let source = Url::parse("file:///tmp/example").unwrap();
         assert!(validate_sources(&[source]).is_err());

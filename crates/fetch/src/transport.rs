@@ -1,5 +1,5 @@
-//! Protocol adapters.  FTP and FTPS use libcurl through Rust bindings rather
-//! than shelling out to a system command; credentials stay in-memory.
+//! Protocol adapters. FTP, FTPS, and SFTP use libcurl through Rust bindings
+//! rather than shelling out to a system command; credentials stay in-memory.
 
 use anyhow::{Context, Result, bail};
 use curl::easy::Easy;
@@ -9,15 +9,15 @@ pub async fn content_length(source: Url) -> Result<u64> {
     tokio::task::spawn_blocking(move || {
         let mut handle = configured(&source)?;
         handle.nobody(true)?;
-        handle.perform().context("probing FTP(S) source")?;
+        handle.perform().context("probing FTP(S)/SFTP source")?;
         let size = handle.content_length_download()?;
         if !size.is_finite() || size < 0.0 {
-            bail!("FTP(S) source did not provide a content length");
+            bail!("FTP(S)/SFTP source did not provide a content length");
         }
         Ok(size as u64)
     })
     .await
-    .context("FTP(S) probe worker failed")?
+    .context("FTP(S)/SFTP probe worker failed")?
 }
 
 pub async fn get_range(source: Url, start: u64, end: u64) -> Result<Vec<u8>> {
@@ -27,7 +27,7 @@ pub async fn get_range(source: Url, start: u64, end: u64) -> Result<Vec<u8>> {
         receive(&mut handle)
     })
     .await
-    .context("FTP(S) transfer worker failed")?
+    .context("FTP(S)/SFTP transfer worker failed")?
 }
 
 pub async fn get(source: Url) -> Result<Vec<u8>> {
@@ -36,12 +36,12 @@ pub async fn get(source: Url) -> Result<Vec<u8>> {
         receive(&mut handle)
     })
     .await
-    .context("FTP(S) transfer worker failed")?
+    .context("FTP(S)/SFTP transfer worker failed")?
 }
 
 fn configured(source: &Url) -> Result<Easy> {
     match source.scheme() {
-        "ftp" | "ftps" => {}
+        "ftp" | "ftps" | "sftp" => {}
         other => bail!("unsupported curl transport: {other}"),
     }
     let mut handle = Easy::new();
