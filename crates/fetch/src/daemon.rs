@@ -37,6 +37,7 @@ struct AppState {
     max_tries: usize,
     retry_wait_seconds: u64,
     rpc_secret: Option<Arc<str>>,
+    continue_downloads: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +88,10 @@ impl Store {
     fn open() -> anyhow::Result<(Self, HashMap<Uuid, Job>)> {
         let connection = Connection::open("fetch.sqlite3")?;
         connection.execute_batch("CREATE TABLE IF NOT EXISTS jobs (gid TEXT PRIMARY KEY, status TEXT NOT NULL, sources TEXT NOT NULL, output TEXT NOT NULL, error TEXT);")?;
-        connection.execute("UPDATE jobs SET status='error', error='daemon interrupted before completion' WHERE status='active'", [])?;
+        connection.execute(
+            "UPDATE jobs SET status='waiting', error=NULL WHERE status='active'",
+            [],
+        )?;
         let mut statement =
             connection.prepare("SELECT gid,status,sources,output,error FROM jobs")?;
         let jobs = statement
@@ -149,7 +153,9 @@ pub async fn serve_with_config(
         rpc_secret: rpc_secret
             .filter(|secret| !secret.is_empty())
             .map(Arc::from),
+        continue_downloads: config.continue_downloads,
     };
+    requeue_persisted(&state).await;
     let app = Router::new()
         .route("/jsonrpc", post(rpc))
         .route("/events", get(websocket))
@@ -194,6 +200,8 @@ async fn rpc(
         }
         "fetch.addUri" | "aria2.addUri" => add_uri(state, &request.params).await,
         "fetch.addTorrent" | "aria2.addTorrent" => add_torrent(state, &request.params).await,
+        "fetch.pause" | "aria2.pause" | "aria2.forcePause" => pause(&state, &request.params).await,
+        "fetch.unpause" | "aria2.unpause" => unpause(state, &request.params).await,
         "aria2.tellActive" => list_jobs(&state, |status| matches!(status, JobStatus::Active)).await,
         "aria2.tellWaiting" => {
             list_jobs(&state, |status| matches!(status, JobStatus::Waiting)).await
@@ -283,6 +291,92 @@ async fn list_jobs(
             .collect::<Vec<_>>(),
     )
     .map_err(|_| (-32603, "serialization failure"))
+}
+
+async fn requeue_persisted(state: &AppState) {
+    if !state.continue_downloads {
+        return;
+    }
+    let jobs = state
+        .jobs
+        .read()
+        .await
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    for job in jobs
+        .into_iter()
+        .filter(|job| matches!(job.status, JobStatus::Waiting))
+    {
+        let sources = job
+            .sources
+            .iter()
+            .map(|source| Url::parse(source))
+            .collect::<Result<Vec<_>, _>>();
+        match sources {
+            Ok(sources)
+                if !sources.is_empty()
+                    && sources.iter().all(|url| {
+                        matches!(url.scheme(), "http" | "https" | "ftp" | "ftps" | "sftp")
+                    }) =>
+            {
+                start_http_job(state.clone(), job.gid, sources, job.output, 4)
+            }
+            _ => {
+                finish(
+                    state,
+                    job.gid,
+                    Err(anyhow::anyhow!(
+                        "cannot safely restore persisted job source"
+                    )),
+                )
+                .await
+            }
+        }
+    }
+}
+
+async fn pause(state: &AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
+    let gid = parse_gid(params)?;
+    let job = {
+        let mut jobs = state.jobs.write().await;
+        let job = jobs.get_mut(&gid).ok_or((1, "unknown gid"))?;
+        if !matches!(job.status, JobStatus::Active | JobStatus::Waiting) {
+            return Err((2, "job is not active or waiting"));
+        }
+        job.status = JobStatus::Paused;
+        job.clone()
+    };
+    if let Ok(mut tasks) = state.tasks.lock() {
+        if let Some(task) = tasks.remove(&gid) {
+            task.abort();
+        }
+    }
+    persist(state, job).map_err(|_| (-32603, "state persistence failed"))?;
+    Ok(json!(gid))
+}
+
+async fn unpause(state: AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
+    let gid = parse_gid(params)?;
+    let (sources, output) = {
+        let mut jobs = state.jobs.write().await;
+        let job = jobs.get_mut(&gid).ok_or((1, "unknown gid"))?;
+        if !matches!(job.status, JobStatus::Paused) {
+            return Err((2, "job is not paused"));
+        }
+        let sources = job
+            .sources
+            .iter()
+            .map(|source| Url::parse(source))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| (2, "paused job source cannot be restored"))?;
+        job.status = JobStatus::Waiting;
+        let snapshot = job.clone();
+        persist(&state, snapshot).map_err(|_| (-32603, "state persistence failed"))?;
+        (sources, job.output.clone())
+    };
+    start_http_job(state, gid, sources, output, 4);
+    Ok(json!(gid))
 }
 async fn remove(state: &AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
     let gid = parse_gid(params)?;

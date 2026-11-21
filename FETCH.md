@@ -60,6 +60,12 @@ aria2 options fail explicitly rather than being silently ignored. At present,
 jobs. Removing an active or waiting daemon job aborts its in-process task and
 marks it removed; durable restart-resume remains migration work.
 
+For HTTP(S)/FTP(S)/SFTP jobs whose persisted, redacted source can be safely
+parsed again, daemon startup requeues interrupted work and reuses the staged
+range checkpoint. `fetch.pause`/`aria2.pause` and `fetch.unpause`/
+`aria2.unpause` are available for those jobs. Credentials embedded only in a
+URI are intentionally not persisted, so such jobs are never silently resumed.
+
 ## HTTP(S) compatibility options
 
 The `get` command accepts an aria2-familiar subset of network controls:
