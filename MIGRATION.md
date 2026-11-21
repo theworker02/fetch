@@ -15,13 +15,13 @@ and compatible import/export formats before the matching C++ area is retired.
 
 | Track | Upstream responsibility | Rust destination | Completion evidence |
 | --- | --- | --- | --- |
-| CLI and configuration | option handlers, config files, URI input files | `crates/fetch/src/config` | every supported option parsed, validated, documented, and fixture-tested |
+| CLI and configuration | option handlers, config files, URI input files | `crates/fetch/src/config` | typed, fail-closed initial config subset; every supported option parsed, validated, documented, and fixture-tested |
 | Scheduler | request groups, piece selection, retries, bandwidth, resume | `crates/fetch/src/engine` | deterministic queue/retry tests and resumable transfer fixtures |
 | HTTP(S) | HTTP/1.1, authentication, proxies, cookies, TLS | `crates/fetch/src/http` | local HTTP/proxy/TLS integration suite |
 | FTP/FTPS/SFTP | authentication, active/passive modes, TLS, proxying | `crates/fetch/src/ftp` and `src/sftp` | local protocol-server integration suite |
 | BitTorrent | bencode, peers, DHT, trackers, WebSeed, piece state | `crates/fetch/src/torrent` | magnet and `.torrent` interoperability fixtures |
 | Metalink | v3/v4 parsing, mirrors, signatures, chunk hashes | `crates/fetch/src/metalink` | RFC-derived fixtures and checksum failure tests |
-| RPC and daemon | JSON-RPC, WebSocket, sessions, lifecycle, auth | `crates/fetch/src/daemon` | compatibility requests, restart, and authorization tests |
+| RPC and daemon | JSON-RPC, WebSocket, sessions, lifecycle, auth | `crates/fetch/src/daemon` | initial `aria2.*` aliases and bounded queue; compatibility requests, restart, and authorization tests |
 | Persistence | session files, checkpoints, cookies, DHT state | `crates/fetch/src/store` | restart and corruption-recovery tests |
 | Packaging | platform releases, completion, man pages | `packaging/` | reproducible platform build verification |
 

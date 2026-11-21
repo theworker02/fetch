@@ -26,6 +26,12 @@ The Rust workspace is in `crates/fetch`. It currently provides:
   `fetch.addTorrent`, `fetch.tellStatus`, and `fetch.remove`, durable SQLite
   job state, and WebSocket events at `/events`.
 
+The daemon also accepts the matching initial `aria2.addUri`,
+`aria2.addTorrent`, `aria2.tellStatus`, `aria2.remove`, `aria2.forceRemove`,
+`aria2.getVersion`, `aria2.tellActive`, `aria2.tellWaiting`, and
+`aria2.tellStopped` method names. These are compatibility entry points, not a
+claim of full aria2 RPC parity.
+
 The daemon marks active transfers as interrupted after a restart rather than
 claiming that a transfer resumed. Transport-specific resume metadata and service
 manager integration remain to be implemented.
@@ -42,6 +48,15 @@ cargo run -p fetch -- get sftp://user@host.example/path/file.bin --output file.b
 cargo run -p fetch -- torrent 'magnet:?xt=urn:btih:...' --output-directory .\downloads
 cargo run -p fetch -- daemon
 ```
+
+## Typed configuration
+
+Pass `--conf-path path/to/fetch.conf` to validate the current configuration
+subset before starting a command. The supported keys are
+`max-concurrent-downloads`, `max-tries`, `retry-wait`, and `continue`. Unknown
+aria2 options fail explicitly rather than being silently ignored. At present,
+`max-concurrent-downloads` controls the daemon's bounded active-job queue;
+retry and resume policy integration remains migration work.
 
 ## HTTP(S) compatibility options
 

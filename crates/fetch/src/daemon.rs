@@ -1,5 +1,6 @@
 use crate::{
     VERSION,
+    config::FetchConfig,
     download::{DownloadRequest, Downloader},
     torrent,
 };
@@ -22,7 +23,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, Semaphore, broadcast};
 use url::Url;
 use uuid::Uuid;
 
@@ -31,6 +32,7 @@ struct AppState {
     jobs: Arc<RwLock<HashMap<Uuid, Job>>>,
     store: Arc<Mutex<Store>>,
     events: broadcast::Sender<Job>,
+    slots: Arc<Semaphore>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,7 +46,9 @@ struct Job {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum JobStatus {
+    Waiting,
     Active,
+    Paused,
     Complete,
     Error,
     Removed,
@@ -86,6 +90,8 @@ impl Store {
             .query_map([], |row| {
                 let status = match row.get::<_, String>(1)?.as_str() {
                     "active" => JobStatus::Active,
+                    "waiting" => JobStatus::Waiting,
+                    "paused" => JobStatus::Paused,
                     "complete" => JobStatus::Complete,
                     "removed" => JobStatus::Removed,
                     _ => JobStatus::Error,
@@ -113,6 +119,10 @@ impl Store {
 }
 
 pub async fn serve(address: SocketAddr) -> anyhow::Result<()> {
+    serve_with_config(address, FetchConfig::default()).await
+}
+
+pub async fn serve_with_config(address: SocketAddr, config: FetchConfig) -> anyhow::Result<()> {
     if !address.ip().is_loopback() {
         anyhow::bail!(
             "refusing non-loopback JSON-RPC listener; use an authenticated TLS proxy for remote control"
@@ -124,6 +134,7 @@ pub async fn serve(address: SocketAddr) -> anyhow::Result<()> {
         jobs: Arc::new(RwLock::new(jobs)),
         store: Arc::new(Mutex::new(store)),
         events,
+        slots: Arc::new(Semaphore::new(config.max_concurrent_downloads)),
     };
     let app = Router::new()
         .route("/jsonrpc", post(rpc))
@@ -155,13 +166,25 @@ async fn rpc(
         return response(request.id, Err((-32600, "jsonrpc must be 2.0")));
     }
     let outcome = match request.method.as_str() {
-        "fetch.getVersion" => Ok(
+        "fetch.getVersion" | "aria2.getVersion" => Ok(
             json!({"version":VERSION,"enabledFeatures":["http","https","ftp","ftps","sftp","bittorrent","metalink","sha256","json-rpc","websocket-events","sqlite-state"]}),
         ),
-        "fetch.tellStatus" => tell_status(&state, &request.params).await,
-        "fetch.remove" => remove(&state, &request.params).await,
-        "fetch.addUri" => add_uri(state, &request.params).await,
-        "fetch.addTorrent" => add_torrent(state, &request.params).await,
+        "fetch.tellStatus" | "aria2.tellStatus" => tell_status(&state, &request.params).await,
+        "fetch.remove" | "aria2.remove" | "aria2.forceRemove" => {
+            remove(&state, &request.params).await
+        }
+        "fetch.addUri" | "aria2.addUri" => add_uri(state, &request.params).await,
+        "fetch.addTorrent" | "aria2.addTorrent" => add_torrent(state, &request.params).await,
+        "aria2.tellActive" => list_jobs(&state, |status| matches!(status, JobStatus::Active)).await,
+        "aria2.tellWaiting" => {
+            list_jobs(&state, |status| matches!(status, JobStatus::Waiting)).await
+        }
+        "aria2.tellStopped" => {
+            list_jobs(&state, |status| {
+                !matches!(status, JobStatus::Active | JobStatus::Waiting)
+            })
+            .await
+        }
         _ => Err((-32601, "method not found")),
     };
     response(request.id, outcome)
@@ -200,6 +223,19 @@ async fn tell_status(state: &AppState, params: &Value) -> Result<Value, (i32, &'
     jobs.get(&gid)
         .map(|job| serde_json::to_value(job).map_err(|_| (-32603, "serialization failure")))
         .unwrap_or(Err((1, "unknown gid")))
+}
+
+async fn list_jobs(
+    state: &AppState,
+    include: impl Fn(&JobStatus) -> bool,
+) -> Result<Value, (i32, &'static str)> {
+    let jobs = state.jobs.read().await;
+    serde_json::to_value(
+        jobs.values()
+            .filter(|job| include(&job.status))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|_| (-32603, "serialization failure"))
 }
 async fn remove(state: &AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
     let gid = parse_gid(params)?;
@@ -243,7 +279,7 @@ async fn add_uri(state: AppState, params: &Value) -> Result<Value, (i32, &'stati
     let gid = Uuid::new_v4();
     let job = Job {
         gid,
-        status: JobStatus::Active,
+        status: JobStatus::Waiting,
         sources: sources.iter().map(redact_url).collect(),
         output: output.clone(),
         error: None,
@@ -251,7 +287,33 @@ async fn add_uri(state: AppState, params: &Value) -> Result<Value, (i32, &'stati
     register(&state, job)
         .await
         .map_err(|_| (-32603, "state persistence failed"))?;
+    start_http_job(state, gid, sources, output, splits);
+    Ok(json!(gid))
+}
+
+fn start_http_job(state: AppState, gid: Uuid, sources: Vec<Url>, output: PathBuf, splits: usize) {
     tokio::spawn(async move {
+        let Ok(_slot) = state.slots.clone().acquire_owned().await else {
+            finish(&state, gid, Err(anyhow::anyhow!("scheduler shut down"))).await;
+            return;
+        };
+        let should_run = {
+            let mut jobs = state.jobs.write().await;
+            let Some(job) = jobs.get_mut(&gid) else {
+                return;
+            };
+            if !matches!(job.status, JobStatus::Waiting) {
+                false
+            } else {
+                job.status = JobStatus::Active;
+                let snapshot = job.clone();
+                let _ = persist(&state, snapshot);
+                true
+            }
+        };
+        if !should_run {
+            return;
+        }
         let result = Downloader::new()
             .download(DownloadRequest {
                 sources,
@@ -262,7 +324,6 @@ async fn add_uri(state: AppState, params: &Value) -> Result<Value, (i32, &'stati
             .await;
         finish(&state, gid, result.map(|_| ())).await;
     });
-    Ok(json!(gid))
 }
 async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
     let values = params.as_array().ok_or((
@@ -284,7 +345,7 @@ async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'s
         &state,
         Job {
             gid,
-            status: JobStatus::Active,
+            status: JobStatus::Waiting,
             sources: vec![input.clone()],
             output: output.clone(),
             error: None,
@@ -293,6 +354,21 @@ async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'s
     .await
     .map_err(|_| (-32603, "state persistence failed"))?;
     tokio::spawn(async move {
+        let Ok(_slot) = state.slots.clone().acquire_owned().await else {
+            finish(&state, gid, Err(anyhow::anyhow!("scheduler shut down"))).await;
+            return;
+        };
+        {
+            let mut jobs = state.jobs.write().await;
+            let Some(job) = jobs.get_mut(&gid) else {
+                return;
+            };
+            if !matches!(job.status, JobStatus::Waiting) {
+                return;
+            }
+            job.status = JobStatus::Active;
+            let _ = persist(&state, job.clone());
+        }
         finish(&state, gid, torrent::download(input, output).await).await;
     });
     Ok(json!(gid))
@@ -340,7 +416,9 @@ fn parse_gid(params: &Value) -> Result<Uuid, (i32, &'static str)> {
 }
 fn status_name(status: &JobStatus) -> &'static str {
     match status {
+        JobStatus::Waiting => "waiting",
         JobStatus::Active => "active",
+        JobStatus::Paused => "paused",
         JobStatus::Complete => "complete",
         JobStatus::Error => "error",
         JobStatus::Removed => "removed",

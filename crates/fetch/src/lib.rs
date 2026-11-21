@@ -3,6 +3,7 @@
 //! This crate deliberately keeps protocol parsing, verification and control-plane
 //! code separate so privileged file operations remain local and auditable.
 
+pub mod config;
 pub mod daemon;
 pub mod download;
 pub mod engine;

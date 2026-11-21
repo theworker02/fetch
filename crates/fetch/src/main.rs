@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use fetch::{
+    config::FetchConfig,
     daemon,
     download::{DownloadRequest, Downloader, NetworkOptions},
     metalink, torrent,
@@ -12,6 +13,9 @@ use url::Url;
 #[derive(Debug, Parser)]
 #[command(name = "fetch", version, about = "Rust-native multi-source downloader")]
 struct Cli {
+    /// Fetch configuration file. Unsupported aria2 options fail explicitly.
+    #[arg(long, global = true)]
+    conf_path: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -82,7 +86,12 @@ fn parse_splits(input: &str) -> Result<usize, String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    let config = match cli.conf_path {
+        Some(path) => FetchConfig::from_file(&path)?,
+        None => FetchConfig::default(),
+    };
+    match cli.command {
         Command::Get {
             sources,
             output,
@@ -140,7 +149,7 @@ async fn main() -> Result<()> {
                 result.sha256
             );
         }
-        Command::Daemon { listen } => daemon::serve(listen).await?,
+        Command::Daemon { listen } => daemon::serve_with_config(listen, config).await?,
         Command::Torrent {
             input,
             output_directory,
