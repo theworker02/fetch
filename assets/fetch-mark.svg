@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Fetch logo</title>
+  <desc id="desc">A blue directional F formed from download lanes.</desc>
+  <rect width="256" height="256" rx="54" fill="#0b1220"/>
+  <path fill="#5bb4ff" d="M59 45h142v42H102v34h78v41h-78v49H59z"/>
+  <path fill="#e6f3ff" d="M157 104l45 45-45 45v-31h-40v-29h40z"/>
+</svg>

@@ -44,3 +44,7 @@ compile
 main.log
 main.trs
 test-suite.log
+
+# Rust build and project-local Cargo cache
+/target/
+/.cargo-local/

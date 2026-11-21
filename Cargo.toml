@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/fetch"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-2.0-only"
+repository = "https://github.com/aria2/aria2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
