@@ -57,10 +57,13 @@ Repository layout
   Their historical references use the aria2 name until each component is
   replaced and its documentation is migrated.
 
+``MIGRATION.md``
+  The subsystem-by-subsystem parity contract and retirement criteria for the
+  C++ implementation.
+
 License and attribution
 -----------------------
 
 Fetch is derived from aria2 and remains licensed under GPL-2.0-only.  See
 ``COPYING`` and ``AUTHORS`` for upstream licensing and attribution.
-
 
