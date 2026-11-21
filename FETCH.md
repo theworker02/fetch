@@ -55,8 +55,10 @@ Pass `--conf-path path/to/fetch.conf` to validate the current configuration
 subset before starting a command. The supported keys are
 `max-concurrent-downloads`, `max-tries`, `retry-wait`, and `continue`. Unknown
 aria2 options fail explicitly rather than being silently ignored. At present,
-`max-concurrent-downloads` controls the daemon's bounded active-job queue;
-retry and resume policy integration remains migration work.
+`max-concurrent-downloads` controls the daemon's bounded active-job queue.
+`max-tries` and `retry-wait` now govern retry attempts for daemon HTTP-family
+jobs. Removing an active or waiting daemon job aborts its in-process task and
+marks it removed; durable restart-resume remains migration work.
 
 ## HTTP(S) compatibility options
 

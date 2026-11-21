@@ -33,6 +33,9 @@ struct AppState {
     store: Arc<Mutex<Store>>,
     events: broadcast::Sender<Job>,
     slots: Arc<Semaphore>,
+    tasks: Arc<Mutex<HashMap<Uuid, tokio::task::AbortHandle>>>,
+    max_tries: usize,
+    retry_wait_seconds: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +138,9 @@ pub async fn serve_with_config(address: SocketAddr, config: FetchConfig) -> anyh
         store: Arc::new(Mutex::new(store)),
         events,
         slots: Arc::new(Semaphore::new(config.max_concurrent_downloads)),
+        tasks: Arc::new(Mutex::new(HashMap::new())),
+        max_tries: config.max_tries,
+        retry_wait_seconds: config.retry_wait_seconds,
     };
     let app = Router::new()
         .route("/jsonrpc", post(rpc))
@@ -242,12 +248,14 @@ async fn remove(state: &AppState, params: &Value) -> Result<Value, (i32, &'stati
     let job = {
         let mut jobs = state.jobs.write().await;
         let job = jobs.get_mut(&gid).ok_or((1, "unknown gid"))?;
-        if matches!(job.status, JobStatus::Active) {
-            return Err((2, "active-transfer cancellation is not implemented"));
-        }
         job.status = JobStatus::Removed;
         job.clone()
     };
+    if let Ok(mut tasks) = state.tasks.lock() {
+        if let Some(task) = tasks.remove(&gid) {
+            task.abort();
+        }
+    }
     persist(&state, job).map_err(|_| (-32603, "state persistence failed"))?;
     Ok(json!(gid))
 }
@@ -292,7 +300,9 @@ async fn add_uri(state: AppState, params: &Value) -> Result<Value, (i32, &'stati
 }
 
 fn start_http_job(state: AppState, gid: Uuid, sources: Vec<Url>, output: PathBuf, splits: usize) {
-    tokio::spawn(async move {
+    let task_state = state.clone();
+    let task = tokio::spawn(async move {
+        let state = task_state;
         let Ok(_slot) = state.slots.clone().acquire_owned().await else {
             finish(&state, gid, Err(anyhow::anyhow!("scheduler shut down"))).await;
             return;
@@ -314,16 +324,39 @@ fn start_http_job(state: AppState, gid: Uuid, sources: Vec<Url>, output: PathBuf
         if !should_run {
             return;
         }
-        let result = Downloader::new()
+        let result = download_with_retry(&state, sources, output, splits).await;
+        finish(&state, gid, result.map(|_| ())).await;
+    });
+    if let Ok(mut tasks) = state.tasks.lock() {
+        tasks.insert(gid, task.abort_handle());
+    }
+}
+
+async fn download_with_retry(
+    state: &AppState,
+    sources: Vec<Url>,
+    output: PathBuf,
+    splits: usize,
+) -> anyhow::Result<()> {
+    let mut last_error = None;
+    for attempt in 1..=state.max_tries {
+        match Downloader::new()
             .download(DownloadRequest {
-                sources,
-                output,
+                sources: sources.clone(),
+                output: output.clone(),
                 splits,
                 sha256: None,
             })
-            .await;
-        finish(&state, gid, result.map(|_| ())).await;
-    });
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt < state.max_tries && state.retry_wait_seconds > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(state.retry_wait_seconds)).await;
+        }
+    }
+    Err(last_error.expect("max_tries is validated positive"))
 }
 async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'static str)> {
     let values = params.as_array().ok_or((
@@ -353,7 +386,9 @@ async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'s
     )
     .await
     .map_err(|_| (-32603, "state persistence failed"))?;
-    tokio::spawn(async move {
+    let task_state = state.clone();
+    let task = tokio::spawn(async move {
+        let state = task_state;
         let Ok(_slot) = state.slots.clone().acquire_owned().await else {
             finish(&state, gid, Err(anyhow::anyhow!("scheduler shut down"))).await;
             return;
@@ -371,6 +406,9 @@ async fn add_torrent(state: AppState, params: &Value) -> Result<Value, (i32, &'s
         }
         finish(&state, gid, torrent::download(input, output).await).await;
     });
+    if let Ok(mut tasks) = state.tasks.lock() {
+        tasks.insert(gid, task.abort_handle());
+    }
     Ok(json!(gid))
 }
 async fn register(state: &AppState, job: Job) -> anyhow::Result<()> {
@@ -379,6 +417,9 @@ async fn register(state: &AppState, job: Job) -> anyhow::Result<()> {
     Ok(())
 }
 async fn finish(state: &AppState, gid: Uuid, result: anyhow::Result<()>) {
+    if let Ok(mut tasks) = state.tasks.lock() {
+        tasks.remove(&gid);
+    }
     let job = {
         let mut jobs = state.jobs.write().await;
         let Some(job) = jobs.get_mut(&gid) else {
