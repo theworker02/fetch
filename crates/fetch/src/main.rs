@@ -64,6 +64,9 @@ enum Command {
     Daemon {
         #[arg(long, default_value = "127.0.0.1:6800")]
         listen: std::net::SocketAddr,
+        /// Require this RPC token. Prefer the FETCH_RPC_SECRET environment variable.
+        #[arg(long, env = "FETCH_RPC_SECRET", hide_env_values = true)]
+        rpc_secret: Option<String>,
     },
     /// Download a magnet link or .torrent URL through the BitTorrent engine.
     Torrent {
@@ -149,7 +152,9 @@ async fn main() -> Result<()> {
                 result.sha256
             );
         }
-        Command::Daemon { listen } => daemon::serve_with_config(listen, config).await?,
+        Command::Daemon { listen, rpc_secret } => {
+            daemon::serve_with_config(listen, config, rpc_secret).await?
+        }
         Command::Torrent {
             input,
             output_directory,

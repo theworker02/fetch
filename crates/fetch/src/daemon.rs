@@ -10,7 +10,7 @@ use axum::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -36,6 +36,7 @@ struct AppState {
     tasks: Arc<Mutex<HashMap<Uuid, tokio::task::AbortHandle>>>,
     max_tries: usize,
     retry_wait_seconds: u64,
+    rpc_secret: Option<Arc<str>>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,10 +123,14 @@ impl Store {
 }
 
 pub async fn serve(address: SocketAddr) -> anyhow::Result<()> {
-    serve_with_config(address, FetchConfig::default()).await
+    serve_with_config(address, FetchConfig::default(), None).await
 }
 
-pub async fn serve_with_config(address: SocketAddr, config: FetchConfig) -> anyhow::Result<()> {
+pub async fn serve_with_config(
+    address: SocketAddr,
+    config: FetchConfig,
+    rpc_secret: Option<String>,
+) -> anyhow::Result<()> {
     if !address.ip().is_loopback() {
         anyhow::bail!(
             "refusing non-loopback JSON-RPC listener; use an authenticated TLS proxy for remote control"
@@ -141,6 +146,9 @@ pub async fn serve_with_config(address: SocketAddr, config: FetchConfig) -> anyh
         tasks: Arc::new(Mutex::new(HashMap::new())),
         max_tries: config.max_tries,
         retry_wait_seconds: config.retry_wait_seconds,
+        rpc_secret: rpc_secret
+            .filter(|secret| !secret.is_empty())
+            .map(Arc::from),
     };
     let app = Router::new()
         .route("/jsonrpc", post(rpc))
@@ -166,10 +174,15 @@ async fn event_socket(mut socket: WebSocket, mut events: broadcast::Receiver<Job
 }
 async fn rpc(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<RpcRequest>,
 ) -> (StatusCode, Json<RpcResponse>) {
     if request.jsonrpc != "2.0" {
         return response(request.id, Err((-32600, "jsonrpc must be 2.0")));
+    }
+    let mut request = request;
+    if !authorize(&headers, &mut request, state.rpc_secret.as_deref()) {
+        return response(request.id, Err((1, "authorization failed")));
     }
     let outcome = match request.method.as_str() {
         "fetch.getVersion" | "aria2.getVersion" => Ok(
@@ -194,6 +207,34 @@ async fn rpc(
         _ => Err((-32601, "method not found")),
     };
     response(request.id, outcome)
+}
+
+fn authorize(headers: &HeaderMap, request: &mut RpcRequest, expected: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let bearer = headers
+        .get("authorization")
+        .and_then(|header| header.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if bearer.is_some_and(|token| token == expected) {
+        return true;
+    }
+    let Some(params) = request.params.as_array_mut() else {
+        return false;
+    };
+    let Some(token) = params.first().and_then(Value::as_str) else {
+        return false;
+    };
+    if token
+        .strip_prefix("token:")
+        .is_some_and(|token| token == expected)
+    {
+        params.remove(0);
+        true
+    } else {
+        false
+    }
 }
 fn response(
     id: Value,

@@ -78,6 +78,11 @@ they are not silently emulated.
 The daemon deliberately refuses non-loopback addresses. Any remote exposure
 must use an authenticated TLS proxy and an explicit security design.
 
+Set `FETCH_RPC_SECRET` (or pass `--rpc-secret`) to require control-plane
+authentication. Fetch accepts `Authorization: Bearer <secret>` and the
+aria2-compatible first RPC parameter `token:<secret>`. The secret is runtime
+only and is never written to SQLite.
+
 ## Migration architecture
 
 ```text
