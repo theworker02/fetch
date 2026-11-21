@@ -68,7 +68,9 @@ impl Downloader {
     }
 
     pub fn with_network(network: NetworkOptions) -> Result<Self> {
-        let mut builder = reqwest::Client::builder();
+        // Do not inherit ambient proxy variables: proxy behavior must be
+        // explicit and therefore visible in Fetch configuration/CLI output.
+        let mut builder = reqwest::Client::builder().no_proxy();
         if let Some(user_agent) = network.user_agent {
             builder = builder.user_agent(user_agent);
         } else {
@@ -406,5 +408,62 @@ mod tests {
         assert!(bypasses_proxy(&url, &["example.test".into()]));
         assert!(!bypasses_proxy(&url, &["ample.test".into()]));
         assert!(bypasses_proxy(&url, &["*".into()]));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires loopback networking, which the desktop sandbox forbids"]
+    async fn downloads_segmented_bytes_from_a_real_http_server() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let length = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let body = b"abcdef";
+                if request.starts_with("HEAD ") {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n").await.unwrap();
+                    continue;
+                }
+                let range = request
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("range: bytes=")
+                            .or_else(|| line.strip_prefix("Range: bytes="))
+                    })
+                    .unwrap();
+                let (start, end) = range.split_once('-').unwrap();
+                let start: usize = start.parse().unwrap();
+                let end: usize = end.parse().unwrap();
+                let response = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/6\r\nConnection: close\r\n\r\n",
+                    end - start + 1,
+                    start,
+                    end
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.write_all(&body[start..=end]).await.unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("download.bin");
+        let result = Downloader::new()
+            .download(DownloadRequest {
+                sources: vec![Url::parse(&format!("http://{address}/file")).unwrap()],
+                output: output.clone(),
+                splits: 2,
+                sha256: None,
+            })
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(result.bytes, 6);
+        assert_eq!(fs::read(output).await.unwrap(), b"abcdef");
     }
 }
