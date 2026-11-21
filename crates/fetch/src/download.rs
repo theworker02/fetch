@@ -466,4 +466,57 @@ mod tests {
         assert_eq!(result.bytes, 6);
         assert_eq!(fs::read(output).await.unwrap(), b"abcdef");
     }
+
+    #[tokio::test]
+    #[ignore = "requires loopback networking, which the desktop sandbox forbids"]
+    async fn routes_http_transfers_through_an_explicit_proxy() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let length = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                if request.starts_with("HEAD ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n",
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nvia",
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("proxied.bin");
+        let downloader = Downloader::with_network(NetworkOptions {
+            all_proxy: Some(proxy),
+            ..Default::default()
+        })
+        .unwrap();
+        downloader
+            .download(DownloadRequest {
+                sources: vec![Url::parse("http://origin.invalid/file").unwrap()],
+                output: output.clone(),
+                splits: 1,
+                sha256: None,
+            })
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(fs::read(output).await.unwrap(), b"via");
+    }
 }

@@ -606,3 +606,47 @@ fn redact_url(source: &Url) -> String {
     let _ = source.set_password(None);
     source.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(params: Value) -> RpcRequest {
+        RpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "aria2.tellActive".into(),
+            params,
+        }
+    }
+
+    #[test]
+    fn rpc_token_parameter_authorizes_and_is_removed_before_dispatch() {
+        let mut request = request(json!(["token:local-secret", "argument"]));
+        assert!(authorize(
+            &HeaderMap::new(),
+            &mut request,
+            Some("local-secret")
+        ));
+        assert_eq!(request.params, json!(["argument"]));
+    }
+
+    #[test]
+    fn bearer_token_authorizes_without_rewriting_params() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer local-secret".parse().unwrap());
+        let mut request = request(json!(["argument"]));
+        assert!(authorize(&headers, &mut request, Some("local-secret")));
+        assert_eq!(request.params, json!(["argument"]));
+    }
+
+    #[test]
+    fn missing_or_invalid_token_is_rejected() {
+        let mut request = request(json!(["token:wrong"]));
+        assert!(!authorize(
+            &HeaderMap::new(),
+            &mut request,
+            Some("local-secret")
+        ));
+    }
+}
