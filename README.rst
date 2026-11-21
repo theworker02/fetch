@@ -19,6 +19,8 @@ provides:
 * concurrent segmented HTTP/HTTPS downloads from multiple mirrors;
 * FTP and FTPS downloads, with TLS certificate validation for FTPS;
 * final-file SHA-256 verification;
+* resumable ranged transfers with a local, atomic ``.fetch.resume.json``
+  checkpoint beside the staged file;
 * Metalink source resolution and complete per-piece SHA-256, SHA-1, and MD5
   verification for a selected file;
 * BitTorrent and magnet downloads through ``librqbit``;
@@ -29,6 +31,9 @@ The C++ implementation is still present while the full in-place migration is
 underway.  Do not treat Fetch as a drop-in, release-ready replacement for
 aria2 yet: persistent transfer resume, complete protocol compatibility,
 release packaging, and a comprehensive Rust test suite remain migration work.
+
+Build verification runs on Linux, macOS, and Windows and uploads unsigned
+artifacts only.  Fetch does not publish a GitHub release automatically.
 
 Quick start
 -----------

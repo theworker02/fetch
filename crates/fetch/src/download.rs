@@ -1,8 +1,12 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::transport;
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -24,6 +28,19 @@ pub struct DownloadResult {
     pub path: PathBuf,
     pub bytes: u64,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResumeState {
+    length: u64,
+    sources: Vec<String>,
+    completed: Vec<ByteRange>,
 }
 
 #[derive(Clone)]
@@ -55,26 +72,47 @@ impl Downloader {
             .await
             .context("creating destination directory")?;
         let staging = request.output.with_extension("fetch.part");
+        let resume_path = request.output.with_extension("fetch.resume.json");
+        let sources = request
+            .sources
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let resume = load_resume(&resume_path, metadata.length, &sources).await?;
         let file = OpenOptions::new()
             .create(true)
             .write(true)
-            .truncate(true)
+            .truncate(!staging.exists())
             .open(&staging)
             .await?;
         file.set_len(metadata.length).await?;
         let file = Arc::new(Mutex::new(file));
 
         if metadata.ranges && request.splits > 1 && metadata.length > 0 {
+            let state = Arc::new(Mutex::new(resume.unwrap_or(ResumeState {
+                length: metadata.length,
+                sources,
+                completed: Vec::new(),
+            })));
             let parts = request.splits.min(metadata.length as usize);
             let chunk = metadata.length.div_ceil(parts as u64);
             let mut work = tokio::task::JoinSet::new();
             for index in 0..parts {
                 let start = index as u64 * chunk;
                 let end = (start + chunk).min(metadata.length) - 1;
+                let range = ByteRange { start, end };
+                if state.lock().await.completed.contains(&range) {
+                    continue;
+                }
                 let source = request.sources[index % request.sources.len()].clone();
                 let client = self.client.clone();
                 let file = file.clone();
-                work.spawn(async move { copy_range(client, source, start, end, file).await });
+                let state = state.clone();
+                let resume_path = resume_path.clone();
+                work.spawn(async move {
+                    copy_range(client, source, start, end, file).await?;
+                    record_completed(state, resume_path, range).await
+                });
             }
             while let Some(task) = work.join_next().await {
                 task.context("download worker panicked")??;
@@ -104,6 +142,9 @@ impl Downloader {
         fs::rename(&staging, &request.output)
             .await
             .context("finalizing completed download")?;
+        if resume_path.exists() {
+            fs::remove_file(&resume_path).await?;
+        }
         Ok(DownloadResult {
             path: request.output,
             bytes,
@@ -134,6 +175,35 @@ impl Downloader {
             .is_some_and(|h| h.as_bytes().eq_ignore_ascii_case(b"bytes"));
         Ok(RemoteMetadata { length, ranges })
     }
+}
+
+async fn load_resume(path: &Path, length: u64, sources: &[String]) -> Result<Option<ResumeState>> {
+    let Ok(encoded) = fs::read(path).await else {
+        return Ok(None);
+    };
+    let state: ResumeState = serde_json::from_slice(&encoded).context("parsing resume metadata")?;
+    if state.length != length || state.sources != sources {
+        return Ok(None);
+    }
+    Ok(Some(state))
+}
+
+async fn record_completed(
+    state: Arc<Mutex<ResumeState>>,
+    path: PathBuf,
+    range: ByteRange,
+) -> Result<()> {
+    let encoded = {
+        let mut state = state.lock().await;
+        if !state.completed.contains(&range) {
+            state.completed.push(range);
+        }
+        serde_json::to_vec_pretty(&*state)?
+    };
+    let temporary = path.with_extension("fetch.resume.tmp");
+    fs::write(&temporary, encoded).await?;
+    fs::rename(temporary, path).await?;
+    Ok(())
 }
 
 struct RemoteMetadata {
@@ -239,5 +309,24 @@ mod tests {
         assert!(validate_sources(&[source]).is_ok());
         let source = Url::parse("file:///tmp/example").unwrap();
         assert!(validate_sources(&[source]).is_err());
+    }
+
+    #[tokio::test]
+    async fn persists_and_loads_compatible_resume_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file.fetch.resume.json");
+        let state = Arc::new(Mutex::new(ResumeState {
+            length: 16,
+            sources: vec!["https://example.test/file".into()],
+            completed: Vec::new(),
+        }));
+        record_completed(state, path.clone(), ByteRange { start: 0, end: 7 })
+            .await
+            .unwrap();
+        let restored = load_resume(&path, 16, &["https://example.test/file".into()])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.completed, vec![ByteRange { start: 0, end: 7 }]);
     }
 }

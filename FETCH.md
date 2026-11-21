@@ -12,6 +12,7 @@ to that source repository.
 The Rust workspace is in `crates/fetch`. It currently provides:
 
 - concurrent ranged HTTP/HTTPS downloads from multiple mirrors;
+- persisted completed-range checkpoints for compatible resumed transfers;
 - FTP and FTPS downloads through libcurl, with certificate validation retained
   for FTPS;
 - atomic `.part` staging and full-file SHA-256 validation;
@@ -25,6 +26,10 @@ The Rust workspace is in `crates/fetch`. It currently provides:
 The daemon marks active transfers as interrupted after a restart rather than
 claiming that a transfer resumed. Transport-specific resume metadata and service
 manager integration remain to be implemented.
+
+The repository's ``Fetch Rust`` workflow builds and tests the Rust binary on
+Linux, macOS, and Windows, retaining unsigned artifacts for review. It does
+not publish releases automatically.
 
 ## Run
 
