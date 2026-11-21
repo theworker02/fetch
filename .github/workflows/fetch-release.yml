@@ -1,0 +1,55 @@
+name: Fetch release artifacts
+
+on:
+  push:
+    tags: ["fetch-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: fetch
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: fetch
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: fetch.exe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Assemble archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/fetch
+          tar -C dist -czf fetch-${{ matrix.target }}.tar.gz fetch
+          shasum -a 256 fetch-${{ matrix.target }}.tar.gz > fetch-${{ matrix.target }}.tar.gz.sha256
+      - name: Assemble archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/fetch.exe
+          Compress-Archive -Path dist/fetch.exe -DestinationPath fetch-${{ matrix.target }}.zip
+          (Get-FileHash fetch-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + "  fetch-${{ matrix.target }}.zip" | Set-Content fetch-${{ matrix.target }}.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fetch-${{ matrix.target }}
+          path: fetch-*.*
+
+# Creating a GitHub Release or platform signature is intentionally omitted.
+# Add signing credentials and an audited publish step only when available.
