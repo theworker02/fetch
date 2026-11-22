@@ -7,6 +7,7 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
+use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchConfig {
@@ -18,6 +19,10 @@ pub struct FetchConfig {
     pub headers: Vec<String>,
     pub timeout_seconds: Option<u64>,
     pub connect_timeout_seconds: Option<u64>,
+    pub all_proxy: Option<Url>,
+    pub http_proxy: Option<Url>,
+    pub https_proxy: Option<Url>,
+    pub no_proxy: Vec<String>,
 }
 
 impl Default for FetchConfig {
@@ -31,6 +36,10 @@ impl Default for FetchConfig {
             headers: Vec::new(),
             timeout_seconds: None,
             connect_timeout_seconds: None,
+            all_proxy: None,
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: Vec::new(),
         }
     }
 }
@@ -85,6 +94,21 @@ impl FetchConfig {
                 "connect-timeout" => {
                     config.connect_timeout_seconds = Some(nonzero_u64(key, value)?)
                 }
+                "all-proxy" => config.all_proxy = Some(proxy_url(key, value)?),
+                "http-proxy" => config.http_proxy = Some(proxy_url(key, value)?),
+                "https-proxy" => config.https_proxy = Some(proxy_url(key, value)?),
+                "no-proxy" => {
+                    let entries = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|entry| !entry.is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>();
+                    if entries.is_empty() {
+                        bail!("no-proxy must contain at least one host");
+                    }
+                    config.no_proxy.extend(entries);
+                }
                 _ => bail!("unsupported Fetch configuration option: {key}"),
             }
         }
@@ -98,6 +122,15 @@ fn nonzero_u64(key: &str, value: &str) -> Result<u64> {
         .with_context(|| format!("{key} must be a positive integer"))?;
     if parsed == 0 {
         bail!("{key} must be greater than zero");
+    }
+    Ok(parsed)
+}
+
+fn proxy_url(key: &str, value: &str) -> Result<Url> {
+    let parsed =
+        Url::parse(value).with_context(|| format!("{key} must be an absolute proxy URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        bail!("{key} must be an absolute HTTP(S) proxy URL");
     }
     Ok(parsed)
 }
@@ -127,7 +160,7 @@ mod tests {
     #[test]
     fn accepts_the_supported_compatibility_subset() {
         let config = FetchConfig::parse(
-            "max-concurrent-downloads=2\nmax-tries=7\nretry-wait=3\ncontinue=false\nuser-agent=fetch-test\nheader=X-One: 1\nheader=X-Two: 2\ntimeout=10\nconnect-timeout=3\n",
+            "max-concurrent-downloads=2\nmax-tries=7\nretry-wait=3\ncontinue=false\nuser-agent=fetch-test\nheader=X-One: 1\nheader=X-Two: 2\ntimeout=10\nconnect-timeout=3\nall-proxy=http://proxy.example:8080\nno-proxy=localhost,.internal\n",
         )
         .unwrap();
         assert_eq!(config.max_concurrent_downloads, 2);
@@ -138,6 +171,8 @@ mod tests {
         assert_eq!(config.headers, ["X-One: 1", "X-Two: 2"]);
         assert_eq!(config.timeout_seconds, Some(10));
         assert_eq!(config.connect_timeout_seconds, Some(3));
+        assert_eq!(config.all_proxy.unwrap().host_str(), Some("proxy.example"));
+        assert_eq!(config.no_proxy, ["localhost", ".internal"]);
     }
 
     #[test]
@@ -146,5 +181,7 @@ mod tests {
         assert!(FetchConfig::parse("max-tries=0").is_err());
         assert!(FetchConfig::parse("timeout=0").is_err());
         assert!(FetchConfig::parse("header=invalid").is_err());
+        assert!(FetchConfig::parse("http-proxy=ftp://proxy.example").is_err());
+        assert!(FetchConfig::parse("no-proxy=,").is_err());
     }
 }

@@ -10,7 +10,7 @@ absent rather than silently ignored.
 | `max-concurrent-downloads` | Supported | `fetch.conf`; bounds daemon jobs |
 | `max-tries`, `retry-wait` | Supported | `fetch.conf`; daemon HTTP-family retry policy |
 | `continue` | Supported | controls restart requeueing of safely restorable jobs |
-| `all-proxy`, `http-proxy`, `https-proxy`, `no-proxy` | Supported | CLI HTTP(S) controls |
+| `all-proxy`, `http-proxy`, `https-proxy`, `no-proxy` | Supported | CLI and `fetch.conf` HTTP(S) controls; no ambient proxy inheritance |
 | `header`, `user-agent` | Supported | CLI and `fetch.conf` HTTP(S) controls; repeated config `header` values are supported |
 | `timeout` | Supported with Fetch semantics | CLI or `fetch.conf` HTTP(S) total request deadline in seconds; aria2 uses a socket timeout |
 | `connect-timeout` | Fetch extension | CLI or `fetch.conf` HTTP(S) TCP/TLS connection-establishment deadline in seconds |

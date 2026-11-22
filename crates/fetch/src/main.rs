@@ -127,10 +127,10 @@ async fn main() -> Result<()> {
                 anyhow::bail!("provide at least one source URI or --input-file");
             }
             let network = NetworkOptions {
-                all_proxy,
-                http_proxy,
-                https_proxy,
-                no_proxy,
+                all_proxy: all_proxy.or(config.all_proxy.clone()),
+                http_proxy: http_proxy.or(config.http_proxy.clone()),
+                https_proxy: https_proxy.or(config.https_proxy.clone()),
+                no_proxy: config.no_proxy.iter().cloned().chain(no_proxy).collect(),
                 user_agent: user_agent.or_else(|| config.user_agent.clone()),
                 headers: config.headers.iter().cloned().chain(headers).collect(),
                 connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
@@ -158,6 +158,10 @@ async fn main() -> Result<()> {
         } => {
             let entry = metalink::read(&manifest).await?;
             let result = Downloader::with_network(NetworkOptions {
+                all_proxy: config.all_proxy.clone(),
+                http_proxy: config.http_proxy.clone(),
+                https_proxy: config.https_proxy.clone(),
+                no_proxy: config.no_proxy.clone(),
                 user_agent: config.user_agent.clone(),
                 headers: config.headers.clone(),
                 connect_timeout_seconds: config.connect_timeout_seconds,

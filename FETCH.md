@@ -54,12 +54,19 @@ cargo run -p fetch -- daemon
 Pass `--conf-path path/to/fetch.conf` to validate the current configuration
 subset before starting a command. The supported keys are
 `max-concurrent-downloads`, `max-tries`, `retry-wait`, `continue`,
-`user-agent`, repeatable `header`, `timeout`, and `connect-timeout`. Unknown
+`user-agent`, repeatable `header`, `timeout`, `connect-timeout`, `all-proxy`,
+`http-proxy`, `https-proxy`, and comma-separated `no-proxy`. Unknown
 aria2 options fail explicitly rather than being silently ignored. At present,
 `max-concurrent-downloads` controls the daemon's bounded active-job queue.
 `max-tries` and `retry-wait` now govern retry attempts for daemon HTTP-family
 jobs. Removing an active or waiting daemon job aborts its in-process task and
 marks it removed.
+
+CLI proxy values override the matching `fetch.conf` proxy value, while CLI
+`--no-proxy` entries add to the configured bypass list. Proxy URLs can include
+credentials, so configuration files containing them must be protected. Fetch
+does not inherit ambient proxy variables unless its explicit CLI environment
+bindings are used.
 
 For HTTP(S)/FTP(S)/SFTP jobs whose persisted, redacted source can be safely
 parsed again, daemon startup requeues interrupted work and reuses the staged
