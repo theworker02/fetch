@@ -51,6 +51,9 @@ enum Command {
         /// Additional HTTP request header in 'Name: value' form; repeatable.
         #[arg(long = "header")]
         headers: Vec<String>,
+        /// Total HTTP(S) request timeout in seconds (compatible with --timeout).
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     /// Resolve a Metalink document and download its selected file.
     Metalink {
@@ -106,6 +109,7 @@ async fn main() -> Result<()> {
             no_proxy,
             user_agent,
             headers,
+            timeout,
         } => {
             let network = NetworkOptions {
                 all_proxy,
@@ -114,6 +118,7 @@ async fn main() -> Result<()> {
                 no_proxy,
                 user_agent,
                 headers,
+                timeout_seconds: timeout,
             };
             let result = Downloader::with_network(network)?
                 .download(DownloadRequest {

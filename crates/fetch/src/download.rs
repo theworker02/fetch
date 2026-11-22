@@ -27,6 +27,7 @@ pub struct NetworkOptions {
     pub no_proxy: Vec<String>,
     pub user_agent: Option<String>,
     pub headers: Vec<String>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,12 @@ impl Downloader {
         // Do not inherit ambient proxy variables: proxy behavior must be
         // explicit and therefore visible in Fetch configuration/CLI output.
         let mut builder = reqwest::Client::builder().no_proxy();
+        if let Some(timeout) = network.timeout_seconds {
+            if timeout == 0 {
+                bail!("timeout must be greater than zero");
+            }
+            builder = builder.timeout(std::time::Duration::from_secs(timeout));
+        }
         if let Some(user_agent) = network.user_agent {
             builder = builder.user_agent(user_agent);
         } else {
@@ -408,6 +415,17 @@ mod tests {
         assert!(bypasses_proxy(&url, &["example.test".into()]));
         assert!(!bypasses_proxy(&url, &["ample.test".into()]));
         assert!(bypasses_proxy(&url, &["*".into()]));
+    }
+
+    #[test]
+    fn rejects_a_zero_request_timeout() {
+        assert!(
+            Downloader::with_network(NetworkOptions {
+                timeout_seconds: Some(0),
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[tokio::test]
