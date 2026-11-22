@@ -7,6 +7,7 @@ pub mod config;
 pub mod daemon;
 pub mod download;
 pub mod engine;
+pub mod input_file;
 pub mod metalink;
 pub mod torrent;
 pub mod transport;

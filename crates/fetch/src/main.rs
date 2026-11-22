@@ -6,7 +6,7 @@ use fetch::{
     config::FetchConfig,
     daemon,
     download::{DownloadRequest, Downloader, NetworkOptions},
-    metalink, torrent,
+    input_file, metalink, torrent,
 };
 use url::Url;
 
@@ -24,8 +24,11 @@ struct Cli {
 enum Command {
     /// Download one or more HTTP(S), FTP(S), or SFTP sources into a local file.
     Get {
-        #[arg(required = true)]
+        /// Source URIs supplied directly on the command line.
         sources: Vec<Url>,
+        /// Read additional source URIs from an aria2-style input file. Repeatable.
+        #[arg(long = "input-file", short = 'i')]
+        input_files: Vec<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(short = 's', long, default_value_t = 4, value_parser = parse_splits)]
@@ -103,6 +106,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Get {
             sources,
+            input_files,
             output,
             splits,
             sha256,
@@ -115,6 +119,13 @@ async fn main() -> Result<()> {
             timeout,
             connect_timeout,
         } => {
+            let sources = input_files.into_iter().try_fold(sources, |mut all, path| {
+                all.extend(input_file::read(&path)?);
+                Ok::<_, anyhow::Error>(all)
+            })?;
+            if sources.is_empty() {
+                anyhow::bail!("provide at least one source URI or --input-file");
+            }
             let network = NetworkOptions {
                 all_proxy,
                 http_proxy,

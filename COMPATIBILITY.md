@@ -15,7 +15,7 @@ absent rather than silently ignored.
 | `timeout` | Supported with Fetch semantics | CLI HTTP(S) total request deadline in seconds; aria2 uses a socket timeout |
 | `connect-timeout` | Fetch extension | CLI HTTP(S) TCP/TLS connection-establishment deadline in seconds |
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
-| input/config URI files | Planned | typed config only; no URI-list parser yet |
+| `--input-file` URI lists | Partially supported | one absolute URI per line, with comments; per-download option lines fail explicitly |
 | cookies, `.netrc`, HTTP auth options | Planned | never silently loaded |
 | bandwidth, connection-per-server, file allocation | Planned | no compatibility shim |
 | certificate/key and RPC TLS options | Planned | loopback daemon; use TLS proxy |
