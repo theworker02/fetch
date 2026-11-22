@@ -53,12 +53,13 @@ cargo run -p fetch -- daemon
 
 Pass `--conf-path path/to/fetch.conf` to validate the current configuration
 subset before starting a command. The supported keys are
-`max-concurrent-downloads`, `max-tries`, `retry-wait`, and `continue`. Unknown
+`max-concurrent-downloads`, `max-tries`, `retry-wait`, `continue`,
+`user-agent`, repeatable `header`, `timeout`, and `connect-timeout`. Unknown
 aria2 options fail explicitly rather than being silently ignored. At present,
 `max-concurrent-downloads` controls the daemon's bounded active-job queue.
 `max-tries` and `retry-wait` now govern retry attempts for daemon HTTP-family
 jobs. Removing an active or waiting daemon job aborts its in-process task and
-marks it removed; durable restart-resume remains migration work.
+marks it removed.
 
 For HTTP(S)/FTP(S)/SFTP jobs whose persisted, redacted source can be safely
 parsed again, daemon startup requeues interrupted work and reuses the staged
@@ -101,5 +102,5 @@ Verification ─── local staging / resume metadata
 Persistent daemon state
 ```
 
-The committed initial adapter is HTTP(S). Adding a transport requires real
+The HTTP(S) adapter is the most complete current transport. Adding a transport requires real
 integration tests against a local protocol fixture, not a placeholder command.

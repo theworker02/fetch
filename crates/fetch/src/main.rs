@@ -131,10 +131,10 @@ async fn main() -> Result<()> {
                 http_proxy,
                 https_proxy,
                 no_proxy,
-                user_agent,
-                headers,
-                connect_timeout_seconds: connect_timeout,
-                timeout_seconds: timeout,
+                user_agent: user_agent.or_else(|| config.user_agent.clone()),
+                headers: config.headers.iter().cloned().chain(headers).collect(),
+                connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
+                timeout_seconds: timeout.or(config.timeout_seconds),
             };
             let result = Downloader::with_network(network)?
                 .download(DownloadRequest {
@@ -157,14 +157,20 @@ async fn main() -> Result<()> {
             splits,
         } => {
             let entry = metalink::read(&manifest).await?;
-            let result = Downloader::new()
-                .download(DownloadRequest {
-                    sources: entry.sources.clone(),
-                    output,
-                    splits,
-                    sha256: entry.sha256.clone(),
-                })
-                .await?;
+            let result = Downloader::with_network(NetworkOptions {
+                user_agent: config.user_agent.clone(),
+                headers: config.headers.clone(),
+                connect_timeout_seconds: config.connect_timeout_seconds,
+                timeout_seconds: config.timeout_seconds,
+                ..Default::default()
+            })?
+            .download(DownloadRequest {
+                sources: entry.sources.clone(),
+                output,
+                splits,
+                sha256: entry.sha256.clone(),
+            })
+            .await?;
             metalink::verify_pieces(&result.path, &entry).await?;
             println!(
                 "completed {} ({} bytes, sha256={})",
