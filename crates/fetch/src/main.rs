@@ -51,9 +51,12 @@ enum Command {
         /// Additional HTTP request header in 'Name: value' form; repeatable.
         #[arg(long = "header")]
         headers: Vec<String>,
-        /// Total HTTP(S) request timeout in seconds (compatible with --timeout).
+        /// Total HTTP(S) request deadline in seconds. This differs from aria2's socket timeout.
         #[arg(long)]
         timeout: Option<u64>,
+        /// HTTP(S) connection-establishment timeout in seconds.
+        #[arg(long = "connect-timeout")]
+        connect_timeout: Option<u64>,
     },
     /// Resolve a Metalink document and download its selected file.
     Metalink {
@@ -110,6 +113,7 @@ async fn main() -> Result<()> {
             user_agent,
             headers,
             timeout,
+            connect_timeout,
         } => {
             let network = NetworkOptions {
                 all_proxy,
@@ -118,6 +122,7 @@ async fn main() -> Result<()> {
                 no_proxy,
                 user_agent,
                 headers,
+                connect_timeout_seconds: connect_timeout,
                 timeout_seconds: timeout,
             };
             let result = Downloader::with_network(network)?

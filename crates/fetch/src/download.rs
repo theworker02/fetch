@@ -27,6 +27,8 @@ pub struct NetworkOptions {
     pub no_proxy: Vec<String>,
     pub user_agent: Option<String>,
     pub headers: Vec<String>,
+    /// Time allowed to establish a TCP/TLS connection before the request fails.
+    pub connect_timeout_seconds: Option<u64>,
     pub timeout_seconds: Option<u64>,
 }
 
@@ -72,6 +74,12 @@ impl Downloader {
         // Do not inherit ambient proxy variables: proxy behavior must be
         // explicit and therefore visible in Fetch configuration/CLI output.
         let mut builder = reqwest::Client::builder().no_proxy();
+        if let Some(timeout) = network.connect_timeout_seconds {
+            if timeout == 0 {
+                bail!("connect timeout must be greater than zero");
+            }
+            builder = builder.connect_timeout(std::time::Duration::from_secs(timeout));
+        }
         if let Some(timeout) = network.timeout_seconds {
             if timeout == 0 {
                 bail!("timeout must be greater than zero");
@@ -422,6 +430,17 @@ mod tests {
         assert!(
             Downloader::with_network(NetworkOptions {
                 timeout_seconds: Some(0),
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_a_zero_connect_timeout() {
+        assert!(
+            Downloader::with_network(NetworkOptions {
+                connect_timeout_seconds: Some(0),
                 ..Default::default()
             })
             .is_err()

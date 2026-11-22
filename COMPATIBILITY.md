@@ -12,7 +12,8 @@ absent rather than silently ignored.
 | `continue` | Supported | controls restart requeueing of safely restorable jobs |
 | `all-proxy`, `http-proxy`, `https-proxy`, `no-proxy` | Supported | CLI HTTP(S) controls |
 | `header`, `user-agent` | Supported | CLI HTTP(S) controls |
-| `timeout` | Supported | CLI HTTP(S) total request timeout in seconds |
+| `timeout` | Supported with Fetch semantics | CLI HTTP(S) total request deadline in seconds; aria2 uses a socket timeout |
+| `connect-timeout` | Fetch extension | CLI HTTP(S) TCP/TLS connection-establishment deadline in seconds |
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
 | input/config URI files | Planned | typed config only; no URI-list parser yet |
 | cookies, `.netrc`, HTTP auth options | Planned | never silently loaded |
