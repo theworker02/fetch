@@ -58,6 +58,9 @@ enum Command {
         /// Additional HTTP request header in 'Name: value' form; repeatable.
         #[arg(long = "header")]
         headers: Vec<String>,
+        /// Load HTTP(S) cookies from a Netscape-format cookie file.
+        #[arg(long = "load-cookies")]
+        cookie_file: Option<PathBuf>,
         /// Total HTTP(S) request deadline in seconds. This differs from aria2's socket timeout.
         #[arg(long)]
         timeout: Option<u64>,
@@ -75,6 +78,9 @@ enum Command {
         /// Maximum concurrent requests to one server (aria2: -x).
         #[arg(short = 'x', long = "max-connection-per-server", default_value_t = 1, value_parser = parse_splits)]
         max_connections_per_server: usize,
+        /// Load HTTP(S) cookies from a Netscape-format cookie file.
+        #[arg(long = "load-cookies")]
+        cookie_file: Option<PathBuf>,
     },
     /// Run the local JSON-RPC daemon. It binds only to the selected local address.
     Daemon {
@@ -124,6 +130,7 @@ async fn main() -> Result<()> {
             no_proxy,
             user_agent,
             headers,
+            cookie_file,
             timeout,
             connect_timeout,
         } => {
@@ -163,6 +170,7 @@ async fn main() -> Result<()> {
                 no_proxy: config.no_proxy.iter().cloned().chain(no_proxy).collect(),
                 user_agent: user_agent.or_else(|| config.user_agent.clone()),
                 headers: config.headers.iter().cloned().chain(headers).collect(),
+                cookie_file,
                 connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
                 timeout_seconds: timeout.or(config.timeout_seconds),
             };
@@ -192,6 +200,7 @@ async fn main() -> Result<()> {
             output,
             splits,
             max_connections_per_server,
+            cookie_file,
         } => {
             let entry = metalink::read(&manifest).await?;
             let result = Downloader::with_network(NetworkOptions {
@@ -201,6 +210,7 @@ async fn main() -> Result<()> {
                 no_proxy: config.no_proxy.clone(),
                 user_agent: config.user_agent.clone(),
                 headers: config.headers.clone(),
+                cookie_file,
                 connect_timeout_seconds: config.connect_timeout_seconds,
                 timeout_seconds: config.timeout_seconds,
                 ..Default::default()

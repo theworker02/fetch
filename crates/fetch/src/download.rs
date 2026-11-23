@@ -28,6 +28,8 @@ pub struct NetworkOptions {
     pub no_proxy: Vec<String>,
     pub user_agent: Option<String>,
     pub headers: Vec<String>,
+    /// Netscape cookie file loaded only when explicitly selected.
+    pub cookie_file: Option<PathBuf>,
     /// Time allowed to establish a TCP/TLS connection before the request fails.
     pub connect_timeout_seconds: Option<u64>,
     pub timeout_seconds: Option<u64>,
@@ -66,6 +68,7 @@ struct ResumeState {
 #[derive(Clone)]
 pub struct Downloader {
     client: reqwest::Client,
+    cookies: Arc<Vec<StoredCookie>>,
 }
 
 impl Downloader {
@@ -108,6 +111,10 @@ impl Downloader {
         if !headers.is_empty() {
             builder = builder.default_headers(headers);
         }
+        let cookies = match network.cookie_file {
+            Some(cookie_file) => load_cookies(&cookie_file)?,
+            None => Vec::new(),
+        };
         if network.all_proxy.is_some()
             || network.http_proxy.is_some()
             || network.https_proxy.is_some()
@@ -133,6 +140,7 @@ impl Downloader {
         }
         Ok(Self {
             client: builder.build().context("building HTTP client")?,
+            cookies: Arc::new(cookies),
         })
     }
 
@@ -200,11 +208,12 @@ impl Downloader {
                     .expect("every request source has a connection limiter")
                     .clone();
                 let client = self.client.clone();
+                let cookies = self.cookies.clone();
                 let file = file.clone();
                 let state = state.clone();
                 let resume_path = resume_path.clone();
                 work.spawn(async move {
-                    copy_range(client, source, start, end, file, connection_limit).await?;
+                    copy_range(client, source, start, end, file, connection_limit, cookies).await?;
                     record_completed(state, resume_path, range).await
                 });
             }
@@ -217,6 +226,7 @@ impl Downloader {
                 self.client.clone(),
                 request.sources[0].clone(),
                 file.clone(),
+                self.cookies.clone(),
             )
             .await?;
         }
@@ -255,13 +265,12 @@ impl Downloader {
                 ranges: true,
             });
         }
-        let response = self
-            .client
-            .head(source.clone())
-            .send()
-            .await
-            .context("probing source")?
-            .error_for_status()?;
+        let response =
+            request_with_cookies(self.client.head(source.clone()), source, &self.cookies)
+                .send()
+                .await
+                .context("probing source")?
+                .error_for_status()?;
         let length = response.content_length().context("source did not provide Content-Length; streaming unknown-size files is not enabled yet")?;
         let ranges = response
             .headers()
@@ -269,6 +278,105 @@ impl Downloader {
             .is_some_and(|h| h.as_bytes().eq_ignore_ascii_case(b"bytes"));
         Ok(RemoteMetadata { length, ranges })
     }
+}
+
+#[derive(Debug, Clone)]
+struct StoredCookie {
+    domain: String,
+    path: String,
+    secure: bool,
+    name: String,
+    value: String,
+}
+
+fn load_cookies(path: &Path) -> Result<Vec<StoredCookie>> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("reading cookie file {}", path.display()))?;
+    let mut cookies = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if let Some(cookie) = parse_netscape_cookie_line(line, index + 1)? {
+            cookies.push(StoredCookie {
+                domain: cookie.domain.to_owned(),
+                path: cookie.path.to_owned(),
+                secure: cookie.secure,
+                name: cookie.name.to_owned(),
+                value: cookie.value.to_owned(),
+            });
+        }
+    }
+    Ok(cookies)
+}
+
+fn request_with_cookies(
+    request: reqwest::RequestBuilder,
+    source: &Url,
+    cookies: &[StoredCookie],
+) -> reqwest::RequestBuilder {
+    let values = cookies
+        .iter()
+        .filter(|cookie| cookie_matches(cookie, source))
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        request
+    } else {
+        request.header(reqwest::header::COOKIE, values.join("; "))
+    }
+}
+
+fn cookie_matches(cookie: &StoredCookie, source: &Url) -> bool {
+    let Some(host) = source.host_str() else {
+        return false;
+    };
+    let domain = cookie.domain.trim_start_matches('.');
+    (host.eq_ignore_ascii_case(domain) || host.ends_with(&format!(".{domain}")))
+        && source.path().starts_with(&cookie.path)
+        && (!cookie.secure || source.scheme() == "https")
+}
+
+struct NetscapeCookie<'a> {
+    domain: &'a str,
+    path: &'a str,
+    secure: bool,
+    name: &'a str,
+    value: &'a str,
+}
+
+fn parse_netscape_cookie_line(
+    line: &str,
+    line_number: usize,
+) -> Result<Option<NetscapeCookie<'_>>> {
+    let line = line.trim();
+    if line.is_empty() || (line.starts_with('#') && !line.starts_with("#HttpOnly_")) {
+        return Ok(None);
+    }
+    let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+    let fields = line.split('\t').collect::<Vec<_>>();
+    if fields.len() != 7 {
+        bail!("cookie line {line_number} must use Netscape's seven tab-separated fields");
+    }
+    let domain = fields[0].trim();
+    let path = fields[2].trim();
+    let secure = match fields[3].trim() {
+        "TRUE" => true,
+        "FALSE" => false,
+        _ => bail!("cookie line {line_number} has an invalid secure flag"),
+    };
+    let name = fields[5].trim();
+    if domain.trim_start_matches('.').is_empty()
+        || domain.contains(['/', ':', ' '])
+        || !path.starts_with('/')
+        || name.is_empty()
+    {
+        bail!("cookie line {line_number} contains an invalid domain, path, or name");
+    }
+    Ok(Some(NetscapeCookie {
+        domain,
+        path,
+        secure,
+        name,
+        value: fields[6],
+    }))
 }
 
 fn bypasses_proxy(url: &Url, rules: &[String]) -> bool {
@@ -347,6 +455,7 @@ async fn copy_range(
     end: u64,
     file: Arc<Mutex<File>>,
     connection_limit: Arc<tokio::sync::Semaphore>,
+    cookies: Arc<Vec<StoredCookie>>,
 ) -> Result<()> {
     let _permit = connection_limit
         .acquire_owned()
@@ -367,8 +476,7 @@ async fn copy_range(
         output.write_all(&body).await?;
         return Ok(());
     }
-    let response = client
-        .get(source)
+    let response = request_with_cookies(client.get(source.clone()), &source, &cookies)
         .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
         .send()
         .await?
@@ -387,7 +495,12 @@ async fn copy_range(
     Ok(())
 }
 
-async fn copy_stream(client: reqwest::Client, source: Url, file: Arc<Mutex<File>>) -> Result<()> {
+async fn copy_stream(
+    client: reqwest::Client,
+    source: Url,
+    file: Arc<Mutex<File>>,
+    cookies: Arc<Vec<StoredCookie>>,
+) -> Result<()> {
     if matches!(source.scheme(), "ftp" | "ftps" | "sftp") {
         let body = transport::get(source).await?;
         let mut output = file.lock().await;
@@ -395,7 +508,10 @@ async fn copy_stream(client: reqwest::Client, source: Url, file: Arc<Mutex<File>
         output.write_all(&body).await?;
         return Ok(());
     }
-    let response = client.get(source).send().await?.error_for_status()?;
+    let response = request_with_cookies(client.get(source.clone()), &source, &cookies)
+        .send()
+        .await?
+        .error_for_status()?;
     let mut stream = response.bytes_stream();
     let mut output = file.lock().await;
     output.seek(SeekFrom::Start(0)).await?;
@@ -475,6 +591,55 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_netscape_cookie_records_without_loading_ambient_state() {
+        let cookie = parse_netscape_cookie_line(
+            ".example.test\tTRUE\t/private\tTRUE\t2147483647\tsession\tabc123",
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(cookie.domain, ".example.test");
+        assert_eq!(cookie.path, "/private");
+        assert!(cookie.secure);
+        assert_eq!(cookie.name, "session");
+        assert_eq!(cookie.value, "abc123");
+        assert!(
+            parse_netscape_cookie_line("# comment", 2)
+                .unwrap()
+                .is_none()
+        );
+        assert!(parse_netscape_cookie_line("example.test\tTRUE\t/\tBAD\t0\tx\ty", 3).is_err());
+        assert!(parse_netscape_cookie_line("example.test\tTRUE\t/\tFALSE\t0\tx", 4).is_err());
+    }
+
+    #[test]
+    fn scopes_loaded_cookies_by_domain_path_and_tls() {
+        let cookie = StoredCookie {
+            domain: ".example.test".into(),
+            path: "/private".into(),
+            secure: true,
+            name: "session".into(),
+            value: "abc".into(),
+        };
+        assert!(cookie_matches(
+            &cookie,
+            &Url::parse("https://api.example.test/private/file").unwrap()
+        ));
+        assert!(!cookie_matches(
+            &cookie,
+            &Url::parse("http://api.example.test/private/file").unwrap()
+        ));
+        assert!(!cookie_matches(
+            &cookie,
+            &Url::parse("https://api.example.test/public/file").unwrap()
+        ));
+        assert!(!cookie_matches(
+            &cookie,
+            &Url::parse("https://example.invalid/private/file").unwrap()
+        ));
     }
 
     #[tokio::test]

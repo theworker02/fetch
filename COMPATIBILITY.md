@@ -17,7 +17,8 @@ absent rather than silently ignored.
 | `max-connection-per-server` (`-x`) | Supported | CLI HTTP(S)/FTP(S)/SFTP and Metalink per-authority concurrent range-request cap |
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
 | `--input-file` job blocks | Partially supported | multi-URI mirror job lines plus indented relative `out=FILE`; other per-download options fail explicitly |
-| cookies, `.netrc`, HTTP auth options | Planned | never silently loaded |
+| `load-cookies` | Supported | explicit Netscape-format cookie file loading for CLI HTTP(S) and Metalink transfers |
+| `.netrc`, HTTP auth options | Planned | never silently loaded |
 | bandwidth, connection-per-server, file allocation | Planned | no compatibility shim |
 | certificate/key and RPC TLS options | Planned | loopback daemon; use TLS proxy |
 | FTP/SFTP proxy and SSH key options | Planned | URL credentials only today |
