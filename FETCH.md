@@ -68,6 +68,21 @@ credentials, so configuration files containing them must be protected. Fetch
 does not inherit ambient proxy variables unless its explicit CLI environment
 bindings are used.
 
+## Input files
+
+`fetch get --input-file uri.txt` accepts aria2-style job blocks. Each
+non-indented line begins one download and can list space-separated mirror URIs.
+An indented `out=FILE` assigns that job a relative destination. This makes
+multi-job input files explicit and avoids output-path collisions. Other
+per-download input options currently fail instead of being ignored.
+
+```text
+https://mirror-a.example/file.iso https://mirror-b.example/file.iso
+  out=file.iso
+https://example.invalid/notes.txt
+  out=notes.txt
+```
+
 For HTTP(S)/FTP(S)/SFTP jobs whose persisted, redacted source can be safely
 parsed again, daemon startup requeues interrupted work and reuses the staged
 range checkpoint. `fetch.pause`/`aria2.pause` and `fetch.unpause`/

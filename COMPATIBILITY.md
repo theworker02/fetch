@@ -16,7 +16,7 @@ absent rather than silently ignored.
 | `connect-timeout` | Fetch extension | CLI or `fetch.conf` HTTP(S) TCP/TLS connection-establishment deadline in seconds |
 | `max-connection-per-server` (`-x`) | Supported | CLI HTTP(S)/FTP(S)/SFTP and Metalink per-authority concurrent range-request cap |
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
-| `--input-file` URI lists | Partially supported | one absolute URI per line, with comments; per-download option lines fail explicitly |
+| `--input-file` job blocks | Partially supported | multi-URI mirror job lines plus indented relative `out=FILE`; other per-download options fail explicitly |
 | cookies, `.netrc`, HTTP auth options | Planned | never silently loaded |
 | bandwidth, connection-per-server, file allocation | Planned | no compatibility shim |
 | certificate/key and RPC TLS options | Planned | loopback daemon; use TLS proxy |

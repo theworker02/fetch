@@ -29,8 +29,9 @@ enum Command {
         /// Read additional source URIs from an aria2-style input file. Repeatable.
         #[arg(long = "input-file", short = 'i')]
         input_files: Vec<PathBuf>,
+        /// Output for direct sources, or fallback for one input-file job without `out=`.
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
         #[arg(short = 's', long, default_value_t = 4, value_parser = parse_splits)]
         splits: usize,
         /// Maximum concurrent requests to one server (aria2: -x).
@@ -126,12 +127,34 @@ async fn main() -> Result<()> {
             timeout,
             connect_timeout,
         } => {
-            let sources = input_files.into_iter().try_fold(sources, |mut all, path| {
-                all.extend(input_file::read(&path)?);
-                Ok::<_, anyhow::Error>(all)
-            })?;
-            if sources.is_empty() {
+            let mut jobs = input_files
+                .into_iter()
+                .try_fold(Vec::new(), |mut all, path| {
+                    all.extend(input_file::read(&path)?);
+                    Ok::<_, anyhow::Error>(all)
+                })?;
+            if !sources.is_empty() {
+                jobs.insert(
+                    0,
+                    input_file::InputJob {
+                        sources,
+                        output: output.clone(),
+                    },
+                );
+            }
+            if jobs.is_empty() {
                 anyhow::bail!("provide at least one source URI or --input-file");
+            }
+            if sha256.is_some() && jobs.len() > 1 {
+                anyhow::bail!("--sha256 applies to one download; use a single source job");
+            }
+            if jobs.len() == 1 && jobs[0].output.is_none() {
+                jobs[0].output = output;
+            }
+            if jobs.iter().any(|job| job.output.is_none()) {
+                anyhow::bail!(
+                    "each input-file job needs an indented out=FILE option when downloading multiple jobs"
+                );
             }
             let network = NetworkOptions {
                 all_proxy: all_proxy.or(config.all_proxy.clone()),
@@ -143,21 +166,26 @@ async fn main() -> Result<()> {
                 connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
                 timeout_seconds: timeout.or(config.timeout_seconds),
             };
-            let result = Downloader::with_network(network)?
-                .download(DownloadRequest {
-                    sources,
-                    output,
-                    splits,
-                    max_connections_per_server,
-                    sha256,
-                })
-                .await?;
-            println!(
-                "completed {} ({} bytes, sha256={})",
-                result.path.display(),
-                result.bytes,
-                result.sha256
-            );
+            let downloader = Downloader::with_network(network)?;
+            for job in jobs {
+                let output = job.output.expect("validated above");
+                let result = downloader
+                    .clone()
+                    .download(DownloadRequest {
+                        sources: job.sources,
+                        output,
+                        splits,
+                        max_connections_per_server,
+                        sha256: sha256.clone(),
+                    })
+                    .await?;
+                println!(
+                    "completed {} ({} bytes, sha256={})",
+                    result.path.display(),
+                    result.bytes,
+                    result.sha256
+                );
+            }
         }
         Command::Metalink {
             manifest,
