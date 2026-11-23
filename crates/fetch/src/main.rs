@@ -33,6 +33,9 @@ enum Command {
         output: PathBuf,
         #[arg(short = 's', long, default_value_t = 4, value_parser = parse_splits)]
         splits: usize,
+        /// Maximum concurrent requests to one server (aria2: -x).
+        #[arg(short = 'x', long = "max-connection-per-server", default_value_t = 1, value_parser = parse_splits)]
+        max_connections_per_server: usize,
         /// Expected SHA-256 digest, in lowercase or uppercase hex.
         #[arg(long)]
         sha256: Option<String>,
@@ -68,6 +71,9 @@ enum Command {
         output: PathBuf,
         #[arg(short = 's', long, default_value_t = 4)]
         splits: usize,
+        /// Maximum concurrent requests to one server (aria2: -x).
+        #[arg(short = 'x', long = "max-connection-per-server", default_value_t = 1, value_parser = parse_splits)]
+        max_connections_per_server: usize,
     },
     /// Run the local JSON-RPC daemon. It binds only to the selected local address.
     Daemon {
@@ -109,6 +115,7 @@ async fn main() -> Result<()> {
             input_files,
             output,
             splits,
+            max_connections_per_server,
             sha256,
             all_proxy,
             http_proxy,
@@ -141,6 +148,7 @@ async fn main() -> Result<()> {
                     sources,
                     output,
                     splits,
+                    max_connections_per_server,
                     sha256,
                 })
                 .await?;
@@ -155,6 +163,7 @@ async fn main() -> Result<()> {
             manifest,
             output,
             splits,
+            max_connections_per_server,
         } => {
             let entry = metalink::read(&manifest).await?;
             let result = Downloader::with_network(NetworkOptions {
@@ -172,6 +181,7 @@ async fn main() -> Result<()> {
                 sources: entry.sources.clone(),
                 output,
                 splits,
+                max_connections_per_server,
                 sha256: entry.sha256.clone(),
             })
             .await?;

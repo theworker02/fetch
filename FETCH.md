@@ -81,7 +81,8 @@ The `get` command accepts an aria2-familiar subset of network controls:
 ```powershell
 fetch get https://mirror.example/file.iso --output file.iso `
   --all-proxy http://proxy.example:8080 --no-proxy localhost,.internal `
-  --header 'Authorization: Bearer example' --user-agent 'fetch/0.1'
+  --header 'Authorization: Bearer example' --user-agent 'fetch/0.1' `
+  --max-connection-per-server 2
 ```
 
 Proxy routing and custom headers currently apply to HTTP(S) only. FTP/FTPS/SFTP

@@ -107,6 +107,7 @@ mod tests {
                 sources: vec![url::Url::parse("https://example.test/file").unwrap()],
                 output: std::env::temp_dir().join("fetch-engine-test.bin"),
                 splits: 1,
+                max_connections_per_server: 1,
                 sha256: None,
             })
             .await;

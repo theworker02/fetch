@@ -480,6 +480,7 @@ async fn download_with_retry(
                 sources: sources.clone(),
                 output: output.clone(),
                 splits,
+                max_connections_per_server: 1,
                 sha256: None,
             })
             .await

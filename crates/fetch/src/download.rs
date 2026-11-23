@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -37,6 +38,8 @@ pub struct DownloadRequest {
     pub sources: Vec<Url>,
     pub output: PathBuf,
     pub splits: usize,
+    /// Maximum simultaneous range requests sent to one scheme/host/port.
+    pub max_connections_per_server: usize,
     pub sha256: Option<String>,
 }
 
@@ -137,7 +140,7 @@ impl Downloader {
         if request.sources.is_empty() {
             bail!("at least one source is required");
         }
-        validate_sources(&request.sources)?;
+        validate_request(&request)?;
         let metadata = self.probe(&request.sources[0]).await?;
         let parent = request
             .output
@@ -171,6 +174,18 @@ impl Downloader {
             })));
             let parts = request.splits.min(metadata.length as usize);
             let chunk = metadata.length.div_ceil(parts as u64);
+            let connection_limits = request
+                .sources
+                .iter()
+                .map(|source| {
+                    (
+                        server_key(source),
+                        Arc::new(tokio::sync::Semaphore::new(
+                            request.max_connections_per_server,
+                        )),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
             let mut work = tokio::task::JoinSet::new();
             for index in 0..parts {
                 let start = index as u64 * chunk;
@@ -180,12 +195,16 @@ impl Downloader {
                     continue;
                 }
                 let source = request.sources[index % request.sources.len()].clone();
+                let connection_limit = connection_limits
+                    .get(&server_key(&source))
+                    .expect("every request source has a connection limiter")
+                    .clone();
                 let client = self.client.clone();
                 let file = file.clone();
                 let state = state.clone();
                 let resume_path = resume_path.clone();
                 work.spawn(async move {
-                    copy_range(client, source, start, end, file).await?;
+                    copy_range(client, source, start, end, file, connection_limit).await?;
                     record_completed(state, resume_path, range).await
                 });
             }
@@ -296,8 +315,11 @@ struct RemoteMetadata {
     ranges: bool,
 }
 
-fn validate_sources(sources: &[Url]) -> Result<()> {
-    for source in sources {
+fn validate_request(request: &DownloadRequest) -> Result<()> {
+    if request.max_connections_per_server == 0 {
+        bail!("max connections per server must be greater than zero");
+    }
+    for source in &request.sources {
         match source.scheme() {
             "http" | "https" | "ftp" | "ftps" | "sftp" => {}
             other => bail!("unsupported transport: {other}"),
@@ -309,13 +331,27 @@ fn validate_sources(sources: &[Url]) -> Result<()> {
     Ok(())
 }
 
+fn server_key(source: &Url) -> String {
+    format!(
+        "{}://{}:{}",
+        source.scheme(),
+        source.host_str().unwrap_or_default(),
+        source.port_or_known_default().unwrap_or_default()
+    )
+}
+
 async fn copy_range(
     client: reqwest::Client,
     source: Url,
     start: u64,
     end: u64,
     file: Arc<Mutex<File>>,
+    connection_limit: Arc<tokio::sync::Semaphore>,
 ) -> Result<()> {
+    let _permit = connection_limit
+        .acquire_owned()
+        .await
+        .context("connection limiter shut down")?;
     let is_ftp = matches!(source.scheme(), "ftp" | "ftps" | "sftp");
     if is_ftp {
         let body = transport::get_range(source, start, end).await?;
@@ -391,11 +427,54 @@ mod tests {
     #[test]
     fn rejects_unknown_transports() {
         let source = Url::parse("ftp://example.test/file").unwrap();
-        assert!(validate_sources(&[source]).is_ok());
+        assert!(
+            validate_request(&DownloadRequest {
+                sources: vec![source],
+                output: PathBuf::from("file"),
+                splits: 1,
+                max_connections_per_server: 1,
+                sha256: None,
+            })
+            .is_ok()
+        );
         let source = Url::parse("sftp://example.test/file").unwrap();
-        assert!(validate_sources(&[source]).is_ok());
+        assert!(
+            validate_request(&DownloadRequest {
+                sources: vec![source],
+                output: PathBuf::from("file"),
+                splits: 1,
+                max_connections_per_server: 1,
+                sha256: None,
+            })
+            .is_ok()
+        );
         let source = Url::parse("file:///tmp/example").unwrap();
-        assert!(validate_sources(&[source]).is_err());
+        assert!(
+            validate_request(&DownloadRequest {
+                sources: vec![source],
+                output: PathBuf::from("file"),
+                splits: 1,
+                max_connections_per_server: 1,
+                sha256: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_connection_limit_and_authority_key() {
+        let source = Url::parse("https://example.test:8443/file").unwrap();
+        assert_eq!(server_key(&source), "https://example.test:8443");
+        assert!(
+            validate_request(&DownloadRequest {
+                sources: vec![source],
+                output: PathBuf::from("file"),
+                splits: 1,
+                max_connections_per_server: 0,
+                sha256: None,
+            })
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -495,6 +574,7 @@ mod tests {
                 sources: vec![Url::parse(&format!("http://{address}/file")).unwrap()],
                 output: output.clone(),
                 splits: 2,
+                max_connections_per_server: 2,
                 sha256: None,
             })
             .await
@@ -549,6 +629,7 @@ mod tests {
                 sources: vec![Url::parse("http://origin.invalid/file").unwrap()],
                 output: output.clone(),
                 splits: 1,
+                max_connections_per_server: 1,
                 sha256: None,
             })
             .await

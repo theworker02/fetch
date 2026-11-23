@@ -14,6 +14,7 @@ absent rather than silently ignored.
 | `header`, `user-agent` | Supported | CLI and `fetch.conf` HTTP(S) controls; repeated config `header` values are supported |
 | `timeout` | Supported with Fetch semantics | CLI or `fetch.conf` HTTP(S) total request deadline in seconds; aria2 uses a socket timeout |
 | `connect-timeout` | Fetch extension | CLI or `fetch.conf` HTTP(S) TCP/TLS connection-establishment deadline in seconds |
+| `max-connection-per-server` (`-x`) | Supported | CLI HTTP(S)/FTP(S)/SFTP and Metalink per-authority concurrent range-request cap |
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
 | `--input-file` URI lists | Partially supported | one absolute URI per line, with comments; per-download option lines fail explicitly |
 | cookies, `.netrc`, HTTP auth options | Planned | never silently loaded |
