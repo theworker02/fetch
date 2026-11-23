@@ -1,41 +1,52 @@
-.. image:: assets/fetch-mark.svg
-   :width: 96
-   :alt: Fetch logo
+.. image:: assets/fetch-wordmark.svg
+   :width: 360
+   :alt: Fetch — Rust download engine
+
+.. image:: https://github.com/theworker02/fetch/actions/workflows/fetch-rust.yml/badge.svg?branch=master
+   :target: https://github.com/theworker02/fetch/actions/workflows/fetch-rust.yml
+   :alt: Fetch Rust CI
+
+.. image:: https://img.shields.io/badge/language-Rust-dea584?logo=rust&logoColor=white
+   :alt: Rust
+
+.. image:: https://img.shields.io/badge/license-GPL--2.0--only-334155
+   :target: COPYING
+   :alt: GPL-2.0-only
+
+.. image:: https://img.shields.io/badge/origin-aria2%20fork-4f46e5
+   :target: https://github.com/aria2/aria2
+   :alt: aria2 fork
 
 Fetch
 =====
 
 Fetch is a Rust-native, local-first multi-source download engine and a
-GPL-2.0-only fork of `aria2 <https://github.com/aria2/aria2>`_.  The fork
-retains aria2's history, source tree, and upstream remote while replacing its
-implementation incrementally in Rust.
+GPL-2.0-only fork of `aria2 <https://github.com/aria2/aria2>`_. The fork
+retains aria2 history, source tree, release references, and its upstream remote
+while a clean-room Rust implementation is built subsystem by subsystem.
 
-Status
-------
+This repository is an active migration, not a claim of full aria2 parity.
+Implemented behavior is documented precisely in `COMPATIBILITY.md
+<COMPATIBILITY.md>`_.
 
-The Rust workspace is in ``crates/fetch``.  The current migration foundation
-provides:
+.. image:: docs/images/fetch-architecture.svg
+   :alt: Fetch architecture: clients, scheduler, adapters, verification, and local state
 
-* concurrent segmented HTTP/HTTPS downloads from multiple mirrors;
-* explicit HTTP(S) proxy, no-proxy, request-header, and user-agent controls;
-* FTP, FTPS, and password-authenticated SFTP downloads, with TLS certificate
-  validation for FTPS;
-* final-file SHA-256 verification;
-* resumable ranged transfers with a local, atomic ``.fetch.resume.json``
-  checkpoint beside the staged file;
-* Metalink source resolution and complete per-piece SHA-256, SHA-1, and MD5
-  verification for a selected file;
-* BitTorrent and magnet downloads through ``librqbit``;
-* a loopback-only JSON-RPC daemon with WebSocket job events and local SQLite
-  job history.
+What works today
+----------------
 
-The C++ implementation is still present while the full in-place migration is
-underway.  Do not treat Fetch as a drop-in, release-ready replacement for
-aria2 yet: persistent transfer resume, complete protocol compatibility,
-release packaging, and a comprehensive Rust test suite remain migration work.
-
-Build verification runs on Linux, macOS, and Windows and uploads unsigned
-artifacts only.  Fetch does not publish a GitHub release automatically.
+* Multi-source, segmented HTTP/HTTPS downloads with atomic staging, SHA-256,
+  resumed range checkpoints, proxy routing, typed timeouts, and per-server
+  concurrency limits.
+* FTP, FTPS, and password-authenticated SFTP downloads via libcurl. FTPS keeps
+  certificate validation enabled.
+* Metalink v4 source extraction and full-file/per-piece SHA-256, SHA-1, and
+  MD5 verification for an explicit file entry.
+* BitTorrent and magnet downloads through the Rust-native ``librqbit`` adapter.
+* A loopback-only JSON-RPC daemon with token authentication, SQLite job state,
+  retry, pause/unpause, safe restart requeueing, and WebSocket events.
+* aria2-style multi-job input files: one job per URI line, space-separated
+  mirrors, and an indented relative ``out=FILE`` destination.
 
 Quick start
 -----------
@@ -45,42 +56,58 @@ Requires a current Rust toolchain.
 .. code-block:: powershell
 
    cargo run -p fetch -- get https://example.com/file.bin --output file.bin --splits 8
-   cargo run -p fetch -- daemon
+   cargo run -p fetch -- get --input-file .\downloads.txt
+   cargo run -p fetch -- daemon --rpc-secret $env:FETCH_RPC_SECRET
 
-The daemon listens only on ``127.0.0.1`` by default.  Place an authenticated
-TLS proxy in front of it if remote access is required.
+``downloads.txt`` may contain independent jobs and mirror sets:
 
-HTTP(S) configuration
-----------------------
+.. code-block:: text
 
-Fetch supports an aria2-familiar subset of request controls: ``--all-proxy``,
-``--http-proxy``, ``--https-proxy``, ``--no-proxy``, ``--header``, and
-``--user-agent``.  The matching proxy environment variables are also accepted.
-These options currently affect HTTP(S) only. Cookie jars, ``.netrc``,
-FTP-family proxies, and the remainder of aria2's options are not implemented
-and are not claimed as compatible.
+   https://mirror-a.example/file.iso https://mirror-b.example/file.iso
+     out=file.iso
+   https://example.invalid/release-notes.txt
+     out=release-notes.txt
 
-Repository layout
------------------
+Project map
+-----------
 
 ``crates/fetch``
-  Rust CLI, download engine, Metalink verifier, BitTorrent adapter, and daemon.
+  Rust CLI, downloader, verifier, BitTorrent adapter, daemon, and typed config.
 
-``assets/fetch-mark.svg``
-  Original Fetch brand mark.
+``assets/``
+  Original Fetch SVG brand assets.
+
+``docs/images/``
+  Architecture diagrams and documentation visuals maintained with the code.
 
 ``doc/`` and historical source directories
-  Upstream aria2 documentation and implementation retained during migration.
-  Their historical references use the aria2 name until each component is
-  replaced and its documentation is migrated.
+  The retained upstream aria2 implementation and documentation, used as the
+  migration baseline until a Rust subsystem replaces it.
 
-``MIGRATION.md``
-  The subsystem-by-subsystem parity contract and retirement criteria for the
-  C++ implementation.
+``MIGRATION.md`` and ``COMPATIBILITY.md``
+  The parity contract, current supported subset, and explicit non-goals.
 
-License and attribution
------------------------
+Security model
+--------------
 
-Fetch is derived from aria2 and remains licensed under GPL-2.0-only.  See
-``COPYING`` and ``AUTHORS`` for upstream licensing and attribution.
+Fetch does not silently inherit proxy behavior, disable certificate validation,
+or expose its daemon remotely. The daemon binds to ``127.0.0.1`` by default;
+remote use requires an intentionally deployed authenticated TLS proxy. Runtime
+RPC secrets are never persisted. URI credentials are redacted before durable
+job state is written.
 
+Migration status
+----------------
+
+The original C++ tree remains part of this actual fork while the replacement is
+completed. Important work still in progress includes XML-RPC, cookie and
+``.netrc`` compatibility, bandwidth controls, expanded protocol fixtures,
+full BitTorrent behavior, and the broader aria2 option catalogue. Fetch rejects
+unsupported configuration options instead of silently accepting them.
+
+Contributing and license
+------------------------
+
+Please review `FETCH.md <FETCH.md>`_ for usage and security details before
+contributing. Fetch inherits aria2's GPL-2.0-only license and attribution; see
+``COPYING`` and ``AUTHORS``.
