@@ -28,6 +28,9 @@ pub struct NetworkOptions {
     pub no_proxy: Vec<String>,
     pub user_agent: Option<String>,
     pub headers: Vec<String>,
+    /// Explicit HTTP Basic credentials. They are never persisted by Fetch.
+    pub http_user: Option<String>,
+    pub http_password: Option<String>,
     /// Netscape cookie file loaded only when explicitly selected.
     pub cookie_file: Option<PathBuf>,
     /// Time allowed to establish a TCP/TLS connection before the request fails.
@@ -107,6 +110,23 @@ impl Downloader {
             let value = reqwest::header::HeaderValue::from_str(value.trim())
                 .context("invalid request header value")?;
             headers.insert(name, value);
+        }
+        match (network.http_user, network.http_password) {
+            (Some(user), Some(password)) => {
+                if headers.contains_key(reqwest::header::AUTHORIZATION) {
+                    bail!(
+                        "--http-user/--http-passwd cannot be combined with an Authorization header"
+                    );
+                }
+                headers.insert(
+                    reqwest::header::AUTHORIZATION,
+                    basic_authorization_value(&user, &password)?,
+                );
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                bail!("--http-user and --http-passwd must be provided together")
+            }
+            (None, None) => {}
         }
         if !headers.is_empty() {
             builder = builder.default_headers(headers);
@@ -278,6 +298,35 @@ impl Downloader {
             .is_some_and(|h| h.as_bytes().eq_ignore_ascii_case(b"bytes"));
         Ok(RemoteMetadata { length, ranges })
     }
+}
+
+fn basic_authorization_value(user: &str, password: &str) -> Result<reqwest::header::HeaderValue> {
+    let encoded = base64_encode(format!("{user}:{password}").as_bytes());
+    reqwest::header::HeaderValue::from_str(&format!("Basic {encoded}"))
+        .context("invalid HTTP Basic credentials")
+}
+
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
+    for group in input.chunks(3) {
+        let first = group[0];
+        let second = *group.get(1).unwrap_or(&0);
+        let third = *group.get(2).unwrap_or(&0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0b11) << 4) | (second >> 4)) as usize] as char);
+        output.push(if group.len() > 1 {
+            ALPHABET[(((second & 0b1111) << 2) | (third >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if group.len() > 2 {
+            ALPHABET[(third & 0b11_1111) as usize] as char
+        } else {
+            '='
+        });
+    }
+    output
 }
 
 #[derive(Debug, Clone)]
@@ -640,6 +689,28 @@ mod tests {
             &cookie,
             &Url::parse("https://example.invalid/private/file").unwrap()
         ));
+    }
+
+    #[test]
+    fn encodes_basic_auth_without_a_new_dependency() {
+        assert_eq!(
+            base64_encode(b"Aladdin:open sesame"),
+            "QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+        );
+        assert_eq!(
+            basic_authorization_value("Aladdin", "open sesame")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+        );
+        assert!(
+            Downloader::with_network(NetworkOptions {
+                http_user: Some("user".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[tokio::test]

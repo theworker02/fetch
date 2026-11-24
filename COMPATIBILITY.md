@@ -18,7 +18,8 @@ absent rather than silently ignored.
 | RPC `token:` authentication | Supported | `FETCH_RPC_SECRET` or `--rpc-secret` |
 | `--input-file` job blocks | Partially supported | multi-URI mirror job lines plus indented relative `out=FILE`; other per-download options fail explicitly |
 | `load-cookies` | Supported | explicit Netscape-format cookie file loading for CLI HTTP(S) and Metalink transfers |
-| `.netrc`, HTTP auth options | Planned | never silently loaded |
+| `http-user`, `http-passwd` | Supported | explicit CLI HTTP Basic auth; password may use `FETCH_HTTP_PASSWD` and is never persisted |
+| `.netrc` | Planned | never silently loaded |
 | bandwidth, connection-per-server, file allocation | Planned | no compatibility shim |
 | certificate/key and RPC TLS options | Planned | loopback daemon; use TLS proxy |
 | FTP/SFTP proxy and SSH key options | Planned | URL credentials only today |

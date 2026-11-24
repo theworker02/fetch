@@ -107,7 +107,9 @@ they are not silently emulated.
 
 Use `--load-cookies cookies.txt` to load an explicit Netscape-format cookie
 file for HTTP(S) and Metalink transfers. Fetch never scans browser profiles or
-silently loads cookie files. Cookie writing and `.netrc` remain unimplemented.
+silently loads cookie files. `--http-user` and `--http-passwd` provide explicit
+HTTP Basic authentication; use `FETCH_HTTP_PASSWD` to avoid placing a password
+in command history. Cookie writing and `.netrc` remain unimplemented.
 
 The daemon deliberately refuses non-loopback addresses. Any remote exposure
 must use an authenticated TLS proxy and an explicit security design.

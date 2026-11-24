@@ -55,6 +55,16 @@ enum Command {
         /// HTTP user-agent value (compatible with --user-agent).
         #[arg(long)]
         user_agent: Option<String>,
+        /// HTTP Basic username. Requires --http-passwd.
+        #[arg(long = "http-user")]
+        http_user: Option<String>,
+        /// HTTP Basic password. Prefer FETCH_HTTP_PASSWD over a visible command argument.
+        #[arg(
+            long = "http-passwd",
+            env = "FETCH_HTTP_PASSWD",
+            hide_env_values = true
+        )]
+        http_password: Option<String>,
         /// Additional HTTP request header in 'Name: value' form; repeatable.
         #[arg(long = "header")]
         headers: Vec<String>,
@@ -78,6 +88,16 @@ enum Command {
         /// Maximum concurrent requests to one server (aria2: -x).
         #[arg(short = 'x', long = "max-connection-per-server", default_value_t = 1, value_parser = parse_splits)]
         max_connections_per_server: usize,
+        /// HTTP Basic username. Requires --http-passwd.
+        #[arg(long = "http-user")]
+        http_user: Option<String>,
+        /// HTTP Basic password. Prefer FETCH_HTTP_PASSWD over a visible command argument.
+        #[arg(
+            long = "http-passwd",
+            env = "FETCH_HTTP_PASSWD",
+            hide_env_values = true
+        )]
+        http_password: Option<String>,
         /// Load HTTP(S) cookies from a Netscape-format cookie file.
         #[arg(long = "load-cookies")]
         cookie_file: Option<PathBuf>,
@@ -129,6 +149,8 @@ async fn main() -> Result<()> {
             https_proxy,
             no_proxy,
             user_agent,
+            http_user,
+            http_password,
             headers,
             cookie_file,
             timeout,
@@ -169,6 +191,8 @@ async fn main() -> Result<()> {
                 https_proxy: https_proxy.or(config.https_proxy.clone()),
                 no_proxy: config.no_proxy.iter().cloned().chain(no_proxy).collect(),
                 user_agent: user_agent.or_else(|| config.user_agent.clone()),
+                http_user,
+                http_password,
                 headers: config.headers.iter().cloned().chain(headers).collect(),
                 cookie_file,
                 connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
@@ -200,6 +224,8 @@ async fn main() -> Result<()> {
             output,
             splits,
             max_connections_per_server,
+            http_user,
+            http_password,
             cookie_file,
         } => {
             let entry = metalink::read(&manifest).await?;
@@ -209,6 +235,8 @@ async fn main() -> Result<()> {
                 https_proxy: config.https_proxy.clone(),
                 no_proxy: config.no_proxy.clone(),
                 user_agent: config.user_agent.clone(),
+                http_user,
+                http_password,
                 headers: config.headers.clone(),
                 cookie_file,
                 connect_timeout_seconds: config.connect_timeout_seconds,
