@@ -71,6 +71,9 @@ enum Command {
         /// Load HTTP(S) cookies from a Netscape-format cookie file.
         #[arg(long = "load-cookies")]
         cookie_file: Option<PathBuf>,
+        /// Load explicit per-host HTTP Basic credentials from a strict `.netrc` file.
+        #[arg(long = "netrc-path")]
+        netrc_path: Option<PathBuf>,
         /// Total HTTP(S) request deadline in seconds. This differs from aria2's socket timeout.
         #[arg(long)]
         timeout: Option<u64>,
@@ -101,6 +104,9 @@ enum Command {
         /// Load HTTP(S) cookies from a Netscape-format cookie file.
         #[arg(long = "load-cookies")]
         cookie_file: Option<PathBuf>,
+        /// Load explicit per-host HTTP Basic credentials from a strict `.netrc` file.
+        #[arg(long = "netrc-path")]
+        netrc_path: Option<PathBuf>,
     },
     /// Run the local JSON-RPC daemon. It binds only to the selected local address.
     Daemon {
@@ -153,6 +159,7 @@ async fn main() -> Result<()> {
             http_password,
             headers,
             cookie_file,
+            netrc_path,
             timeout,
             connect_timeout,
         } => {
@@ -195,6 +202,7 @@ async fn main() -> Result<()> {
                 http_password,
                 headers: config.headers.iter().cloned().chain(headers).collect(),
                 cookie_file,
+                netrc_path,
                 connect_timeout_seconds: connect_timeout.or(config.connect_timeout_seconds),
                 timeout_seconds: timeout.or(config.timeout_seconds),
             };
@@ -227,6 +235,7 @@ async fn main() -> Result<()> {
             http_user,
             http_password,
             cookie_file,
+            netrc_path,
         } => {
             let entry = metalink::read(&manifest).await?;
             let result = Downloader::with_network(NetworkOptions {
@@ -239,6 +248,7 @@ async fn main() -> Result<()> {
                 http_password,
                 headers: config.headers.clone(),
                 cookie_file,
+                netrc_path,
                 connect_timeout_seconds: config.connect_timeout_seconds,
                 timeout_seconds: config.timeout_seconds,
                 ..Default::default()

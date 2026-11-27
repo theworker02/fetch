@@ -33,6 +33,8 @@ pub struct NetworkOptions {
     pub http_password: Option<String>,
     /// Netscape cookie file loaded only when explicitly selected.
     pub cookie_file: Option<PathBuf>,
+    /// Explicit `.netrc` file for per-host HTTP Basic credentials.
+    pub netrc_path: Option<PathBuf>,
     /// Time allowed to establish a TCP/TLS connection before the request fails.
     pub connect_timeout_seconds: Option<u64>,
     pub timeout_seconds: Option<u64>,
@@ -72,6 +74,7 @@ struct ResumeState {
 pub struct Downloader {
     client: reqwest::Client,
     cookies: Arc<Vec<StoredCookie>>,
+    netrc: Arc<Vec<NetrcEntry>>,
 }
 
 impl Downloader {
@@ -128,13 +131,22 @@ impl Downloader {
             }
             (None, None) => {}
         }
-        if !headers.is_empty() {
-            builder = builder.default_headers(headers);
-        }
         let cookies = match network.cookie_file {
             Some(cookie_file) => load_cookies(&cookie_file)?,
             None => Vec::new(),
         };
+        if network.netrc_path.is_some() && headers.contains_key(reqwest::header::AUTHORIZATION) {
+            bail!(
+                "--netrc-path cannot be combined with --http-user/--http-passwd or an Authorization header"
+            );
+        }
+        let netrc = match network.netrc_path {
+            Some(netrc_path) => load_netrc(&netrc_path)?,
+            None => Vec::new(),
+        };
+        if !headers.is_empty() {
+            builder = builder.default_headers(headers);
+        }
         if network.all_proxy.is_some()
             || network.http_proxy.is_some()
             || network.https_proxy.is_some()
@@ -161,6 +173,7 @@ impl Downloader {
         Ok(Self {
             client: builder.build().context("building HTTP client")?,
             cookies: Arc::new(cookies),
+            netrc: Arc::new(netrc),
         })
     }
 
@@ -229,11 +242,22 @@ impl Downloader {
                     .clone();
                 let client = self.client.clone();
                 let cookies = self.cookies.clone();
+                let netrc = self.netrc.clone();
                 let file = file.clone();
                 let state = state.clone();
                 let resume_path = resume_path.clone();
                 work.spawn(async move {
-                    copy_range(client, source, start, end, file, connection_limit, cookies).await?;
+                    copy_range(
+                        client,
+                        source,
+                        start,
+                        end,
+                        file,
+                        connection_limit,
+                        cookies,
+                        netrc,
+                    )
+                    .await?;
                     record_completed(state, resume_path, range).await
                 });
             }
@@ -247,6 +271,7 @@ impl Downloader {
                 request.sources[0].clone(),
                 file.clone(),
                 self.cookies.clone(),
+                self.netrc.clone(),
             )
             .await?;
         }
@@ -285,12 +310,16 @@ impl Downloader {
                 ranges: true,
             });
         }
-        let response =
-            request_with_cookies(self.client.head(source.clone()), source, &self.cookies)
-                .send()
-                .await
-                .context("probing source")?
-                .error_for_status()?;
+        let response = request_with_session(
+            self.client.head(source.clone()),
+            source,
+            &self.cookies,
+            &self.netrc,
+        )?
+        .send()
+        .await
+        .context("probing source")?
+        .error_for_status()?;
         let length = response.content_length().context("source did not provide Content-Length; streaming unknown-size files is not enabled yet")?;
         let ranges = response
             .headers()
@@ -338,6 +367,73 @@ struct StoredCookie {
     value: String,
 }
 
+struct NetrcEntry {
+    machine: String,
+    login: String,
+    password: String,
+}
+
+fn load_netrc(path: &Path) -> Result<Vec<NetrcEntry>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("reading netrc file {}", path.display()))?;
+    parse_netrc(&content)
+}
+
+fn parse_netrc(content: &str) -> Result<Vec<NetrcEntry>> {
+    let tokens = content
+        .lines()
+        .flat_map(|line| {
+            line.split('#')
+                .next()
+                .unwrap_or_default()
+                .split_ascii_whitespace()
+        })
+        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let machine = match tokens[index] {
+            "machine" => {
+                index += 1;
+                tokens
+                    .get(index)
+                    .context("netrc machine requires a host")?
+                    .to_string()
+            }
+            "default" => "default".to_string(),
+            other => bail!(
+                "unsupported netrc token '{other}'; only machine/default, login, and password are supported"
+            ),
+        };
+        index += 1;
+        let mut login = None;
+        let mut password = None;
+        while index < tokens.len() && !matches!(tokens[index], "machine" | "default") {
+            let key = tokens[index];
+            index += 1;
+            let value = tokens
+                .get(index)
+                .with_context(|| format!("netrc {key} requires a value"))?;
+            index += 1;
+            match key {
+                "login" if login.is_none() => login = Some((*value).to_string()),
+                "password" if password.is_none() => password = Some((*value).to_string()),
+                "login" | "password" => bail!("duplicate netrc {key} for machine {machine}"),
+                other => bail!("unsupported netrc token '{other}' for machine {machine}"),
+            }
+        }
+        entries.push(NetrcEntry {
+            machine,
+            login: login.context("netrc machine entry requires login")?,
+            password: password.context("netrc machine entry requires password")?,
+        });
+    }
+    if entries.is_empty() {
+        bail!("netrc file contains no machine entries");
+    }
+    Ok(entries)
+}
+
 fn load_cookies(path: &Path) -> Result<Vec<StoredCookie>> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("reading cookie file {}", path.display()))?;
@@ -356,21 +452,38 @@ fn load_cookies(path: &Path) -> Result<Vec<StoredCookie>> {
     Ok(cookies)
 }
 
-fn request_with_cookies(
+fn request_with_session(
     request: reqwest::RequestBuilder,
     source: &Url,
     cookies: &[StoredCookie],
-) -> reqwest::RequestBuilder {
+    netrc: &[NetrcEntry],
+) -> Result<reqwest::RequestBuilder> {
+    let request = if let Some(credentials) = netrc_credentials(source, netrc) {
+        request.header(
+            reqwest::header::AUTHORIZATION,
+            basic_authorization_value(&credentials.login, &credentials.password)?,
+        )
+    } else {
+        request
+    };
     let values = cookies
         .iter()
         .filter(|cookie| cookie_matches(cookie, source))
         .map(|cookie| format!("{}={}", cookie.name, cookie.value))
         .collect::<Vec<_>>();
     if values.is_empty() {
-        request
+        Ok(request)
     } else {
-        request.header(reqwest::header::COOKIE, values.join("; "))
+        Ok(request.header(reqwest::header::COOKIE, values.join("; ")))
     }
+}
+
+fn netrc_credentials<'a>(source: &Url, entries: &'a [NetrcEntry]) -> Option<&'a NetrcEntry> {
+    let host = source.host_str()?;
+    entries
+        .iter()
+        .find(|entry| entry.machine.eq_ignore_ascii_case(host))
+        .or_else(|| entries.iter().find(|entry| entry.machine == "default"))
 }
 
 fn cookie_matches(cookie: &StoredCookie, source: &Url) -> bool {
@@ -505,6 +618,7 @@ async fn copy_range(
     file: Arc<Mutex<File>>,
     connection_limit: Arc<tokio::sync::Semaphore>,
     cookies: Arc<Vec<StoredCookie>>,
+    netrc: Arc<Vec<NetrcEntry>>,
 ) -> Result<()> {
     let _permit = connection_limit
         .acquire_owned()
@@ -525,7 +639,7 @@ async fn copy_range(
         output.write_all(&body).await?;
         return Ok(());
     }
-    let response = request_with_cookies(client.get(source.clone()), &source, &cookies)
+    let response = request_with_session(client.get(source.clone()), &source, &cookies, &netrc)?
         .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
         .send()
         .await?
@@ -549,6 +663,7 @@ async fn copy_stream(
     source: Url,
     file: Arc<Mutex<File>>,
     cookies: Arc<Vec<StoredCookie>>,
+    netrc: Arc<Vec<NetrcEntry>>,
 ) -> Result<()> {
     if matches!(source.scheme(), "ftp" | "ftps" | "sftp") {
         let body = transport::get(source).await?;
@@ -557,7 +672,7 @@ async fn copy_stream(
         output.write_all(&body).await?;
         return Ok(());
     }
-    let response = request_with_cookies(client.get(source.clone()), &source, &cookies)
+    let response = request_with_session(client.get(source.clone()), &source, &cookies, &netrc)?
         .send()
         .await?
         .error_for_status()?;
@@ -711,6 +826,35 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_and_scopes_explicit_netrc_entries() {
+        let entries = parse_netrc(
+            "machine api.example.test login build password secret\ndefault login fallback password fallback-secret\n",
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            netrc_credentials(
+                &Url::parse("https://api.example.test/file").unwrap(),
+                &entries
+            )
+            .unwrap()
+            .login,
+            "build"
+        );
+        assert_eq!(
+            netrc_credentials(
+                &Url::parse("https://other.example.test/file").unwrap(),
+                &entries
+            )
+            .unwrap()
+            .login,
+            "fallback"
+        );
+        assert!(parse_netrc("machine host login user account unsupported password pass").is_err());
+        assert!(parse_netrc("machine host login user").is_err());
     }
 
     #[tokio::test]

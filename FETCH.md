@@ -109,7 +109,9 @@ Use `--load-cookies cookies.txt` to load an explicit Netscape-format cookie
 file for HTTP(S) and Metalink transfers. Fetch never scans browser profiles or
 silently loads cookie files. `--http-user` and `--http-passwd` provide explicit
 HTTP Basic authentication; use `FETCH_HTTP_PASSWD` to avoid placing a password
-in command history. Cookie writing and `.netrc` remain unimplemented.
+in command history. `--netrc-path` accepts an explicit strict subset of
+`.netrc` (machine/default, login, password) for per-host HTTP(S) Basic auth;
+it is never auto-loaded. Cookie writing remains unimplemented.
 
 The daemon deliberately refuses non-loopback addresses. Any remote exposure
 must use an authenticated TLS proxy and an explicit security design.
